@@ -1,113 +1,123 @@
-# moltbox
+# remram-gateway
 
-**Local hardware appliance for sovereign AI infrastructure.**
+Execution substrate for the Remram system.
 
-Moltbox is the physical control plane for Remram.
+Remram Gateway provisions and runs the local OpenClaw control plane that powers Remram. It wires models, registers agents, connects to memory services, and defines the concrete runtime profile for a given machine.
 
-It is a local-first hardware environment designed to give you ownership of your context, memory, and AI routing layer.
-
-This is what makes your AI stack sovereign.
+If you want to stand up a Remram runtime, this is the repository you use.
 
 ---
 
-## What Moltbox Is
+## Purpose
 
-Moltbox is a dedicated local machine that runs:
+`remram-gateway` owns the execution environment in which Remram operates.
 
-- `remram-os` (orchestration layer)
-- `remram-recall` (RAM — retrieval)
-- `remram-encode` (REM — consolidation)
-- OpenClaw integration
-- OpenSearch (memory substrate)
-- Local routing model
-- Cloud model connectors
+It is responsible for:
 
-The local model is not intended for deep reasoning.
-It is optimized for:
+- Installing and configuring the OpenClaw runtime
+- Wiring local and cloud model endpoints
+- Provisioning and configuring OpenSearch
+- Defining runtime-level escalation policy
+- Registering available agents
+- Defining appliance execution profiles (e.g., Moltbox)
 
-- Intent routing
-- Tool selection
-- Context packaging
-- Guardrail enforcement
-- Short reasoning loops
-
-Heavy cognition can escalate to cloud models.
+Gateway declares what the runtime loads and how it runs.
 
 ---
 
-## Hardware Philosophy
-
-Moltbox separates **control** from **cognition**.
-
-- Local hardware owns memory and routing.
-- External models provide stateless expert reasoning.
-
-This ensures:
-
-- Persistent identity
-- Data ownership
-- Deterministic orchestration
-- Token-efficient cloud usage
-
----
-
-## Minimum System Requirements
-
-Designed around a practical baseline:
-
-- **GPU:** RTX 5060 Ti (16GB VRAM) or equivalent
-- **System RAM:** 64GB recommended (128GB ideal for heavy OpenSearch use)
-- **CPU:** 12–16 cores preferred
-- **Storage:** Dedicated NVMe for OpenSearch index
-
-The 16GB GPU tier supports a local routing model and embedding workloads.
-It is not sized for large-scale deep reasoning models.
-
----
-
-## Recommended Configuration
-
-- 16GB+ VRAM GPU
-- 128GB system RAM
-- Separate NVMe drives:
-  - OS / containers
-  - OpenSearch data
-- Reliable 850W+ PSU
-- Strong cooling and sustained load stability
-
-Moltbox prioritizes stability over peak benchmark performance.
-
----
-
-## Repository Contents
-
-This repository includes:
-
-- Docker and container configurations
-- OpenSearch setup and tuning
-- Model runtime configuration
-- Environment variables and deployment scripts
-- Hardware tuning notes
-- Optional configuration profiles
-
-This repository does not contain memory logic.
-It deploys and wires the system that runs it.
-
----
-
-## Architecture Position
+## Repository Structure
 
 ```
-User
-  ↓
-Moltbox (local control plane)
-  ↓
-remram-os
-  ↓
-RAM / REM
-  ↓
-Cloud Cognition (optional)
+remram-gateway/
+  README.md
+
+  .openclaw/
+    agents.yaml        # Registry of installed agents
+    models.yaml        # Local + cloud model endpoints
+    tools.yaml         # Globally registered tools
+    escalation.yaml    # Runtime escalation policy
+    env.example        # Required environment variables
+
+  moltbox/
+    docker-compose.yml
+    opensearch.yml
+    model-runtime.yml
+    bootstrap.sh
+    README.md          # Moltbox deployment notes
+    design.md          # Moltbox design documentation
 ```
 
-Moltbox ensures your memory remains local and sovereign.
+---
+
+## Directory Responsibilities
+
+### `.openclaw/`
+
+Runtime configuration surface.
+
+This directory contains all configuration that conforms to the OpenClaw specification, including:
+
+- Agent registration
+- Tool registration
+- Model routing configuration
+- Escalation thresholds
+- Required runtime environment variables
+
+Behavioral logic and prompts live in `remram-agents`.
+
+### `moltbox/`
+
+Concrete appliance profile.
+
+This directory defines how to run the Remram runtime on a specific local hardware configuration.
+
+It contains:
+
+- Container stack definitions
+- Search service configuration
+- Model runtime wiring
+- Bootstrap utilities
+- Deployment notes
+- Design documentation
+
+If additional appliance profiles are introduced (e.g., lightweight dev node, alternate hardware tier), they will appear as sibling directories.
+
+Example:
+
+```
+remram-gateway/
+  .openclaw/
+  moltbox/
+  sparkbox/
+  dev-node/
+```
+
+Each profile defines infrastructure assumptions and resource sizing.
+
+---
+
+## What Does Not Live Here
+
+The following concerns belong in other repositories:
+
+- Agent definitions → `remram-agents`
+- Knowledge and memory services → `remram-cortex`
+- User interface and client applications → `remram-app`
+- System-level documentation → `remram`
+
+This repository is strictly the execution substrate.
+
+---
+
+## Usage
+
+To stand up a Remram runtime:
+
+1. Select an appliance profile (e.g., `moltbox/`).
+2. Configure required environment variables.
+3. Launch the container stack.
+4. Ensure OpenClaw loads agents defined in `.openclaw/agents.yaml`.
+5. Connect to the runtime via supported interfaces.
+
+Changes to agent behavior should be made in `remram-agents`.
 
