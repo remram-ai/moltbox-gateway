@@ -63,6 +63,23 @@ install_docker_if_missing() {
   log_info "Docker installation complete."
 }
 
+ensure_docker_group_membership() {
+  local target_user="${SUDO_USER:-${USER}}"
+  if ! getent group docker >/dev/null 2>&1; then
+    log_warn "Docker group was not found after install."
+    return
+  fi
+
+  if id -nG "${target_user}" | tr ' ' '\n' | grep -qx docker; then
+    log_info "User '${target_user}' is already in docker group."
+    return
+  fi
+
+  log_info "Adding user '${target_user}' to docker group."
+  ${SUDO} usermod -aG docker "${target_user}"
+  log_warn "Group membership updated. New shells pick up this change after re-login."
+}
+
 install_nvidia_toolkit_if_missing() {
   if command -v nvidia-ctk >/dev/null 2>&1; then
     log_info "NVIDIA Container Toolkit already installed."
@@ -132,6 +149,7 @@ post_checks() {
 main() {
   require_linux_ubuntu
   install_docker_if_missing
+  ensure_docker_group_membership
   install_nvidia_toolkit_if_missing
   reconcile_vm_max_map_count
   post_checks

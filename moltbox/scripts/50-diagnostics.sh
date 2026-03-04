@@ -15,8 +15,25 @@ COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
 ENV_FILE="${CONFIG_DIR}/.env"
 OUT_DIR="${MOLTBOX_DIR}/logs/diagnostics/$(date +%Y%m%d-%H%M%S)"
 
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+  else
+    sudo docker "$@"
+  fi
+}
+
 compose() {
-  docker compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+}
+
+require_host_cmd() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    log_warn "Required command not found on host: ${cmd}"
+    return 1
+  fi
+  return 0
 }
 
 capture_cmd() {
@@ -39,6 +56,24 @@ capture_shell() {
   } >"${outfile}" 2>&1 || true
 }
 
+capture_inspect() {
+  local service="$1"
+  local outfile="$2"
+  local cid=""
+
+  cid="$(compose ps -q "${service}" 2>/dev/null || true)"
+  if [[ -z "${cid}" ]]; then
+    {
+      echo "# Service: ${service}"
+      echo "# Timestamp: $(timestamp)"
+      echo "Container not found."
+    } >"${outfile}"
+    return
+  fi
+
+  capture_cmd "${outfile}" docker_cmd inspect "${cid}"
+}
+
 load_gateway_port() {
   local port="18789"
   if [[ -f "${ENV_FILE}" ]]; then
@@ -50,12 +85,13 @@ load_gateway_port() {
 }
 
 main() {
+  require_host_cmd docker || exit 1
   mkdir -p "${OUT_DIR}"
   log_info "Writing diagnostics to ${OUT_DIR}"
 
   capture_cmd "${OUT_DIR}/compose-ps.txt" compose ps
   capture_cmd "${OUT_DIR}/compose-config.txt" compose config
-  capture_cmd "${OUT_DIR}/docker-network-ls.txt" docker network ls
+  capture_cmd "${OUT_DIR}/docker-network-ls.txt" docker_cmd network ls
 
   capture_cmd "${OUT_DIR}/logs-openclaw.txt" compose logs --tail=200 openclaw
   capture_cmd "${OUT_DIR}/logs-ollama.txt" compose logs --tail=200 ollama
@@ -68,9 +104,9 @@ main() {
   capture_cmd "${OUT_DIR}/opensearch-cluster-health.json" compose exec -T opensearch curl -sS http://127.0.0.1:9200/_cluster/health
   capture_cmd "${OUT_DIR}/opensearch-indices.txt" compose exec -T opensearch curl -sS http://127.0.0.1:9200/_cat/indices?v
 
-  capture_cmd "${OUT_DIR}/inspect-openclaw.txt" docker inspect "$(compose ps -q openclaw)"
-  capture_cmd "${OUT_DIR}/inspect-ollama.txt" docker inspect "$(compose ps -q ollama)"
-  capture_cmd "${OUT_DIR}/inspect-opensearch.txt" docker inspect "$(compose ps -q opensearch)"
+  capture_inspect "openclaw" "${OUT_DIR}/inspect-openclaw.txt"
+  capture_inspect "ollama" "${OUT_DIR}/inspect-ollama.txt"
+  capture_inspect "opensearch" "${OUT_DIR}/inspect-opensearch.txt"
 
   if command -v nvidia-smi >/dev/null 2>&1; then
     capture_cmd "${OUT_DIR}/nvidia-smi.txt" nvidia-smi

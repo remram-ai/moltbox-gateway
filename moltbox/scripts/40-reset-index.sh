@@ -19,6 +19,14 @@ CONFIRM=false
 ALLOW_ALL=false
 CREATE_IF_MISSING=false
 
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+  else
+    sudo docker "$@"
+  fi
+}
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") --index <name> --confirm [--allow-all] [--create-if-missing]
@@ -34,7 +42,15 @@ EOF
 }
 
 compose() {
-  docker compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+}
+
+require_host_cmd() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    log_error "Required command not found on host: ${cmd}"
+    exit 1
+  fi
 }
 
 os_http_code() {
@@ -115,6 +131,7 @@ print_index_state() {
 }
 
 main() {
+  require_host_cmd docker
   parse_args "$@"
   validate_args
 
@@ -141,7 +158,7 @@ main() {
     else
       log_info "No action taken (idempotent no-op)."
     fi
-  else
+  elif [[ "${exists_code}" == "200" ]]; then
     log_info "Deleting index '${INDEX}'."
     local delete_code
     delete_code="$(os_http_code DELETE "/${INDEX}")"
@@ -159,6 +176,9 @@ main() {
         exit 1
       fi
     fi
+  else
+    log_error "Unexpected HTTP status while checking index '${INDEX}': ${exists_code}"
+    exit 1
   fi
 
   print_index_state "After"

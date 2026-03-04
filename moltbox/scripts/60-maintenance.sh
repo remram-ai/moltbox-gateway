@@ -20,6 +20,14 @@ DO_RESTART=false
 DO_PRUNE=false
 SERVICE=""
 
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+  else
+    sudo docker "$@"
+  fi
+}
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [--pull] [--restart] [--service <name>] [--prune]
@@ -36,7 +44,15 @@ EOF
 }
 
 compose() {
-  docker compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+}
+
+require_host_cmd() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    log_error "Required command not found on host: ${cmd}"
+    exit 1
+  fi
 }
 
 parse_args() {
@@ -112,20 +128,21 @@ do_prune() {
     return
   fi
   log_warn "Running optional prune: dangling images and build cache only."
-  docker image prune -f
-  docker builder prune -f
+  docker_cmd image prune -f
+  docker_cmd builder prune -f
 }
 
 run_validation() {
-  if [[ ! -x "${VALIDATE_SCRIPT}" ]]; then
-    log_error "Validation script is missing or not executable: ${VALIDATE_SCRIPT}"
+  if [[ ! -f "${VALIDATE_SCRIPT}" ]]; then
+    log_error "Validation script is missing: ${VALIDATE_SCRIPT}"
     exit 1
   fi
   log_info "Running post-maintenance validation."
-  "${VALIDATE_SCRIPT}"
+  bash "${VALIDATE_SCRIPT}"
 }
 
 main() {
+  require_host_cmd docker
   parse_args "$@"
   set_defaults_if_none_selected
 

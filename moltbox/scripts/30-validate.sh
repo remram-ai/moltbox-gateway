@@ -15,15 +15,37 @@ CONFIG_DIR="${MOLTBOX_DIR}/config"
 COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
 ENV_FILE="${CONFIG_DIR}/.env"
 CONTAINER_ENV_FILE="${CONFIG_DIR}/container.env"
+OPENCLAW_DIR="${MOLTBOX_DIR}/.openclaw"
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+  else
+    sudo docker "$@"
+  fi
+}
 
 compose() {
-  docker compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+}
+
+require_host_cmd() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    log_error "Required command not found on host: ${cmd}"
+    exit 1
+  fi
 }
 
 require_runtime_files() {
   [[ -f "${COMPOSE_FILE}" ]] || { log_error "Missing compose file: ${COMPOSE_FILE}"; exit 1; }
   [[ -f "${ENV_FILE}" ]] || { log_error "Missing env file: ${ENV_FILE}"; exit 1; }
   [[ -f "${CONTAINER_ENV_FILE}" ]] || { log_error "Missing container env file: ${CONTAINER_ENV_FILE}"; exit 1; }
+  [[ -f "${OPENCLAW_DIR}/agents.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/agents.yaml"; exit 1; }
+  [[ -f "${OPENCLAW_DIR}/routing.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/routing.yaml"; exit 1; }
+  [[ -f "${OPENCLAW_DIR}/tools.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/tools.yaml"; exit 1; }
+  [[ -f "${OPENCLAW_DIR}/escalation.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/escalation.yaml"; exit 1; }
+  [[ -f "${OPENCLAW_DIR}/channels.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/channels.yaml"; exit 1; }
 }
 
 load_env() {
@@ -44,7 +66,7 @@ ensure_service_running() {
     return 1
   fi
   local running
-  running="$(docker inspect -f '{{.State.Running}}' "${cid}")"
+  running="$(docker_cmd inspect -f '{{.State.Running}}' "${cid}")"
   if [[ "${running}" != "true" ]]; then
     log_error "Service '${service}' is not running."
     return 1
@@ -56,7 +78,7 @@ ensure_service_healthy() {
   local cid
   cid="$(compose ps -q "${service}")"
   local health
-  health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${cid}")"
+  health="$(docker_cmd inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${cid}")"
   if [[ "${health}" != "healthy" ]]; then
     log_error "Service '${service}' health is '${health}', expected 'healthy'."
     return 1
@@ -65,8 +87,9 @@ ensure_service_healthy() {
 
 check_gateway() {
   local port="${GATEWAY_PORT:-18789}"
-  log_info "Checking gateway health endpoint on port ${port}."
+  log_info "Checking gateway health/readiness endpoints on port ${port}."
   curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null
+  curl -fsS "http://127.0.0.1:${port}/readyz" >/dev/null
 }
 
 check_internal_connectivity() {
@@ -82,7 +105,7 @@ assert_internal_only_ports() {
   local ps_output
   ps_output="$(compose ps)"
 
-  if grep -Eq '11434->11434/tcp|9200->9200/tcp' <<<"${ps_output}"; then
+  if grep -Eq '->11434/tcp|->9200/tcp' <<<"${ps_output}"; then
     log_error "Detected forbidden published port mapping for Ollama or OpenSearch."
     echo "${ps_output}" >&2
     return 1
@@ -90,6 +113,8 @@ assert_internal_only_ports() {
 }
 
 main() {
+  require_host_cmd docker
+  require_host_cmd curl
   require_runtime_files
   load_env
 

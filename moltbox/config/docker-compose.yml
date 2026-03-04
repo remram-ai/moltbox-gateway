@@ -7,9 +7,15 @@ services:
     image: "${OPENCLAW_IMAGE}"
     container_name: "${COMPOSE_PROJECT_NAME:-moltbox}-openclaw"
     restart: unless-stopped
+    init: true
     env_file:
       - ./.env
       - ./container.env
+    environment:
+      # OpenClaw runtime defaults expected by the upstream Docker flow.
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN}"
     ports:
       - "${GATEWAY_PORT:-18789}:18789"
     depends_on:
@@ -19,16 +25,30 @@ services:
         condition: service_healthy
     volumes:
       # OpenClaw runtime policy/config bundle for Moltbox.
-      - ../.openclaw:/app/.openclaw:ro
+      - ../.openclaw:/home/node/.openclaw
       # Tiered model routing policy for local/cloud cognition.
       - ./model-runtime.yml:/app/config/model-runtime.yml:ro
+      # Compatibility mount in OpenClaw home config surface.
+      - ./model-runtime.yml:/home/node/.openclaw/model-runtime.yml:ro
     networks:
       - moltbox_internal
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "--port",
+        "18789",
+      ]
     healthcheck:
       test:
         [
-          "CMD-SHELL",
-          "(curl -fsS http://127.0.0.1:18789/healthz >/dev/null || wget -qO- http://127.0.0.1:18789/healthz >/dev/null) || exit 1",
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 15s
       timeout: 5s
@@ -50,10 +70,7 @@ services:
       - moltbox_internal
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "(curl -fsS http://127.0.0.1:11434/api/tags >/dev/null || wget -qO- http://127.0.0.1:11434/api/tags >/dev/null) || exit 1",
-        ]
+        ["CMD", "ollama", "list"]
       interval: 20s
       timeout: 8s
       retries: 10
@@ -81,7 +98,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "(curl -fsS http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow\\&timeout=5s >/dev/null || wget -qO- http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow\\&timeout=5s >/dev/null) || exit 1",
+          "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/9200' >/dev/null 2>&1 || exit 1",
         ]
       interval: 20s
       timeout: 8s

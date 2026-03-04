@@ -18,10 +18,26 @@ ENV_EXAMPLE="${CONFIG_DIR}/.env.example"
 CONTAINER_ENV_FILE="${CONFIG_DIR}/container.env"
 CONTAINER_ENV_EXAMPLE="${CONFIG_DIR}/container.env.example"
 
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+  else
+    sudo docker "$@"
+  fi
+}
+
 require_file() {
   local path="$1"
   if [[ ! -f "${path}" ]]; then
     log_error "Required file not found: ${path}"
+    exit 1
+  fi
+}
+
+require_host_cmd() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    log_error "Required command not found on host: ${cmd}"
     exit 1
   fi
 }
@@ -56,6 +72,8 @@ require_key() {
 
 validate_required_keys() {
   require_key "${ENV_FILE}" "OPENCLAW_IMAGE"
+  require_key "${ENV_FILE}" "OPENCLAW_GATEWAY_BIND"
+  require_key "${ENV_FILE}" "OPENCLAW_GATEWAY_TOKEN"
   require_key "${ENV_FILE}" "OLLAMA_IMAGE"
   require_key "${ENV_FILE}" "OPENSEARCH_IMAGE"
   require_key "${ENV_FILE}" "GATEWAY_PORT"
@@ -65,6 +83,22 @@ validate_required_keys() {
   require_key "${CONTAINER_ENV_FILE}" "OLLAMA_BASE_URL"
   require_key "${CONTAINER_ENV_FILE}" "OPENSEARCH_URL"
   require_key "${CONTAINER_ENV_FILE}" "CLOUD_PROVIDER"
+}
+
+ensure_gateway_token() {
+  local token_value
+  token_value="$(grep -E '^OPENCLAW_GATEWAY_TOKEN=' "${ENV_FILE}" | head -n1 | cut -d= -f2-)"
+  if [[ -z "${token_value}" || "${token_value}" == "CHANGE_ME_STRONG_TOKEN" ]]; then
+    local generated_token=""
+    if command -v openssl >/dev/null 2>&1; then
+      generated_token="$(openssl rand -hex 24)"
+    else
+      generated_token="$(date +%s%N | sha256sum | cut -c1-48)"
+    fi
+
+    sed -i "s|^OPENCLAW_GATEWAY_TOKEN=.*$|OPENCLAW_GATEWAY_TOKEN=${generated_token}|" "${ENV_FILE}"
+    log_warn "OPENCLAW_GATEWAY_TOKEN was unset/placeholder. Generated and saved a strong token in ${ENV_FILE}."
+  fi
 }
 
 load_env() {
@@ -77,12 +111,39 @@ load_env() {
 }
 
 compose() {
-  docker compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+}
+
+ensure_openclaw_image_available() {
+  local image="${OPENCLAW_IMAGE}"
+  if docker_cmd image inspect "${image}" >/dev/null 2>&1; then
+    log_info "OpenClaw image already available locally: ${image}"
+    return
+  fi
+
+  if [[ "${image}" == "openclaw:local" ]]; then
+    log_error "OPENCLAW_IMAGE is '${image}', but that image is not present locally."
+    log_error "Build it first from the OpenClaw repository, then rerun bootstrap."
+    log_error "Example:"
+    log_error "  git clone https://github.com/openclaw/openclaw.git"
+    log_error "  cd openclaw"
+    log_error "  docker build -t openclaw:local ."
+    exit 1
+  fi
+
+  log_info "Pulling OpenClaw image: ${image}"
+  compose pull openclaw
+}
+
+pull_images() {
+  # Ollama/OpenSearch are always registry-based in this profile.
+  log_info "Pulling Ollama and OpenSearch images."
+  compose pull ollama opensearch
+  ensure_openclaw_image_available
 }
 
 bring_up_stack() {
-  log_info "Pulling container images."
-  compose pull
+  pull_images
 
   log_info "Starting Moltbox stack."
   compose up -d
@@ -114,16 +175,42 @@ prepull_model() {
   compose exec -T ollama ollama pull "${model}"
 }
 
+wait_for_gateway() {
+  local port="${GATEWAY_PORT:-18789}"
+  local max_attempts=40
+  local attempt=1
+
+  log_info "Waiting for OpenClaw gateway health on http://127.0.0.1:${port}/healthz"
+  while (( attempt <= max_attempts )); do
+    if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+      log_info "OpenClaw gateway is healthy."
+      return 0
+    fi
+    log_warn "Gateway not ready yet (attempt ${attempt}/${max_attempts})."
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  log_error "Gateway did not become healthy on port ${port}."
+  return 1
+}
+
 main() {
+  require_host_cmd docker
+  require_host_cmd curl
   require_file "${COMPOSE_FILE}"
   ensure_env_files
   validate_required_keys
+  ensure_gateway_token
   load_env
 
   bring_up_stack
   wait_for_ollama
   prepull_model
+  wait_for_gateway
 
+  log_info "Gateway token for first login: ${OPENCLAW_GATEWAY_TOKEN}"
+  log_info "Open browser on your LAN: http://<MOLTBOX_HOST>:${GATEWAY_PORT:-18789}"
   log_info "Bootstrap complete."
 }
 
