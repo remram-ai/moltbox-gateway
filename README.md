@@ -2,122 +2,83 @@
 
 Execution substrate for the Remram system.
 
-Remram Gateway provisions and runs the local OpenClaw control plane that powers Remram. It wires models, registers agents, connects to memory services, and defines the concrete runtime profile for a given machine.
+Remram Gateway provisions and runs the local OpenClaw control plane that powers Remram. It wires models, registers agents, connects to supporting services, and defines concrete appliance profiles such as Moltbox.
 
-If you want to stand up a Remram runtime, this is the repository you use.
+## Runtime Architecture
 
----
+This repository is an installer and template source.
 
-## Purpose
+Repository:
 
-`remram-gateway` owns the execution environment in which Remram operates.
+```text
+~/remram-gateway
+```
 
-It is responsible for:
+Live runtime configuration and state:
 
-- Installing and configuring the OpenClaw runtime
-- Wiring local and cloud model endpoints
-- Provisioning and configuring OpenSearch
-- Defining runtime-level escalation policy
-- Registering available agents
-- Defining appliance execution profiles (e.g., Moltbox)
+```text
+~/.openclaw
+```
 
-Gateway declares what the runtime loads and how it runs.
+The `moltbox/.openclaw/` and `moltbox/config/` directories contain templates only. `scripts/20-bootstrap.sh` copies those templates into `~/.openclaw` on first run and leaves existing runtime files in place on subsequent runs.
 
----
+Containers must read runtime configuration from `~/.openclaw`, not from repository paths.
 
 ## Repository Structure
 
-```
+```text
 remram-gateway/
   README.md
-
-  .openclaw/
-    agents.yaml        # Registry of installed agents
-    models.yaml        # Local + cloud model endpoints
-    tools.yaml         # Globally registered tools
-    escalation.yaml    # Runtime escalation policy
-    env.example        # Required environment variables
-
   moltbox/
-    docker-compose.yml
-    opensearch.yml
-    model-runtime.yml
-    bootstrap.sh
-    README.md          # Moltbox deployment notes
-    design.md          # Moltbox design documentation
+    .openclaw/                 # Template OpenClaw YAML files
+    config/                    # Template env/config files and compose definition
+    scripts/                   # Installer, bootstrap, validation, maintenance
+    moltbox-operator-runbook.md
+    moltbox-implementation-guide.md
 ```
 
----
+## Moltbox Runtime Layout
 
-## Directory Responsibilities
+After bootstrap, the runtime root should look like:
 
-### `.openclaw/`
-
-Runtime configuration surface.
-
-This directory contains all configuration that conforms to the OpenClaw specification, including:
-
-- Agent registration
-- Tool registration
-- Model routing configuration
-- Escalation thresholds
-- Required runtime environment variables
-
-Behavioral logic and prompts live in `remram-agents`.
-
-### `moltbox/`
-
-Concrete appliance profile.
-
-This directory defines how to run the Remram runtime on a specific local hardware configuration.
-
-It contains:
-
-- Container stack definitions
-- Search service configuration
-- Model runtime wiring
-- Bootstrap utilities
-- Deployment notes
-- Design documentation
-
-If additional appliance profiles are introduced (e.g., lightweight dev node, alternate hardware tier), they will appear as sibling directories.
-
-Example:
-
+```text
+~/.openclaw/
+  .env
+  container.env
+  model-runtime.yml
+  opensearch.yml
+  agents.yaml
+  channels.yaml
+  routing.yaml
+  tools.yaml
+  escalation.yaml
+  agents/main/agent/models.json
+  logs/
 ```
-remram-gateway/
-  .openclaw/
-  moltbox/
-  sparkbox/
-  dev-node/
-```
-
-Each profile defines infrastructure assumptions and resource sizing.
-
----
-
-## What Does Not Live Here
-
-The following concerns belong in other repositories:
-
-- Agent definitions → `remram-agents`
-- Knowledge and memory services → `remram-cortex`
-- User interface and client applications → `remram-app`
-- System-level documentation → `remram`
-
-This repository is strictly the execution substrate.
-
----
 
 ## Usage
 
-To stand up a Remram runtime:
+Use the operator runbook for deployment:
 
-1. Select an appliance profile (e.g., `moltbox/`).
-2. Configure required environment variables.
-3. Launch the container stack.
-4. Ensure OpenClaw loads agents defined in `.openclaw/agents.yaml`.
-5. Connect to the runtime via supported interfaces.
+[`moltbox/moltbox-operator-runbook.md`](/d:/Development/RemRam/remram-gateway/moltbox/moltbox-operator-runbook.md)
 
-Changes to agent behavior should be made in `remram-agents`.
+Typical lifecycle:
 
+1. Run [`10-install.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/10-install.sh) on the Ubuntu host.
+2. Build or supply the OpenClaw image referenced by `OPENCLAW_IMAGE`.
+3. Run [`20-bootstrap.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/20-bootstrap.sh) to create `~/.openclaw` and start the stack.
+4. Run [`30-validate.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/30-validate.sh) to verify container health and internal connectivity.
+
+For manual Docker Compose operations, export the runtime root first:
+
+```bash
+export MOLTBOX_RUNTIME_ROOT="$HOME/.openclaw"
+cd ~/remram-gateway/moltbox/config
+docker compose ps
+```
+
+## Remote Development
+
+Recommended workflow: VS Code with Remote-SSH connected directly to the Moltbox host.
+
+Edit runtime files under `~/.openclaw` for live configuration changes. Edit repository files under `~/remram-gateway/moltbox/` only when changing templates, scripts, or compose definitions.

@@ -12,19 +12,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOLTBOX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_DIR="${MOLTBOX_DIR}/config"
 COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
-ENV_FILE="${CONFIG_DIR}/.env"
-OUT_DIR="${MOLTBOX_DIR}/logs/diagnostics/$(date +%Y%m%d-%H%M%S)"
+
+resolve_runtime_root() {
+  local target_user="${SUDO_USER:-${USER}}"
+  local target_home=""
+
+  if command -v getent >/dev/null 2>&1; then
+    target_home="$(getent passwd "${target_user}" | cut -d: -f6)"
+  fi
+
+  if [[ -z "${target_home}" ]]; then
+    target_home="${HOME}"
+  fi
+
+  printf '%s\n' "${MOLTBOX_RUNTIME_ROOT:-${target_home}/.openclaw}"
+}
+
+RUNTIME_ROOT="$(resolve_runtime_root)"
+RUNTIME_ENV_FILE="${RUNTIME_ROOT}/.env"
+OUT_DIR="${RUNTIME_ROOT}/logs/diagnostics/$(date +%Y%m%d-%H%M%S)"
 
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
-    docker "$@"
+    env "MOLTBOX_RUNTIME_ROOT=${RUNTIME_ROOT}" docker "$@"
   else
-    sudo docker "$@"
+    sudo env "MOLTBOX_RUNTIME_ROOT=${RUNTIME_ROOT}" docker "$@"
   fi
 }
 
 compose() {
-  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose --env-file "${RUNTIME_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
 require_host_cmd() {
@@ -76,9 +93,9 @@ capture_inspect() {
 
 load_gateway_port() {
   local port="18789"
-  if [[ -f "${ENV_FILE}" ]]; then
+  if [[ -f "${RUNTIME_ENV_FILE}" ]]; then
     # shellcheck disable=SC1090
-    source "${ENV_FILE}"
+    source "${RUNTIME_ENV_FILE}"
     port="${GATEWAY_PORT:-18789}"
   fi
   echo "${port}"

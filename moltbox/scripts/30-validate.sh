@@ -13,20 +13,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOLTBOX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_DIR="${MOLTBOX_DIR}/config"
 COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
-ENV_FILE="${CONFIG_DIR}/.env"
-CONTAINER_ENV_FILE="${CONFIG_DIR}/container.env"
-OPENCLAW_DIR="${MOLTBOX_DIR}/.openclaw"
+
+resolve_runtime_root() {
+  local target_user="${SUDO_USER:-${USER}}"
+  local target_home=""
+
+  if command -v getent >/dev/null 2>&1; then
+    target_home="$(getent passwd "${target_user}" | cut -d: -f6)"
+  fi
+
+  if [[ -z "${target_home}" ]]; then
+    target_home="${HOME}"
+  fi
+
+  printf '%s\n' "${MOLTBOX_RUNTIME_ROOT:-${target_home}/.openclaw}"
+}
+
+RUNTIME_ROOT="$(resolve_runtime_root)"
+RUNTIME_ENV_FILE="${RUNTIME_ROOT}/.env"
+RUNTIME_CONTAINER_ENV_FILE="${RUNTIME_ROOT}/container.env"
+RUNTIME_MODELS_FILE="${RUNTIME_ROOT}/agents/main/agent/models.json"
 
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
-    docker "$@"
+    env "MOLTBOX_RUNTIME_ROOT=${RUNTIME_ROOT}" docker "$@"
   else
-    sudo docker "$@"
+    sudo env "MOLTBOX_RUNTIME_ROOT=${RUNTIME_ROOT}" docker "$@"
   fi
 }
 
 compose() {
-  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose --env-file "${RUNTIME_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
 require_host_cmd() {
@@ -39,21 +56,24 @@ require_host_cmd() {
 
 require_runtime_files() {
   [[ -f "${COMPOSE_FILE}" ]] || { log_error "Missing compose file: ${COMPOSE_FILE}"; exit 1; }
-  [[ -f "${ENV_FILE}" ]] || { log_error "Missing env file: ${ENV_FILE}"; exit 1; }
-  [[ -f "${CONTAINER_ENV_FILE}" ]] || { log_error "Missing container env file: ${CONTAINER_ENV_FILE}"; exit 1; }
-  [[ -f "${OPENCLAW_DIR}/agents.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/agents.yaml"; exit 1; }
-  [[ -f "${OPENCLAW_DIR}/routing.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/routing.yaml"; exit 1; }
-  [[ -f "${OPENCLAW_DIR}/tools.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/tools.yaml"; exit 1; }
-  [[ -f "${OPENCLAW_DIR}/escalation.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/escalation.yaml"; exit 1; }
-  [[ -f "${OPENCLAW_DIR}/channels.yaml" ]] || { log_error "Missing OpenClaw config: ${OPENCLAW_DIR}/channels.yaml"; exit 1; }
+  [[ -f "${RUNTIME_ENV_FILE}" ]] || { log_error "Missing runtime env file: ${RUNTIME_ENV_FILE}"; exit 1; }
+  [[ -f "${RUNTIME_CONTAINER_ENV_FILE}" ]] || { log_error "Missing runtime container env file: ${RUNTIME_CONTAINER_ENV_FILE}"; exit 1; }
+  [[ -f "${RUNTIME_ROOT}/agents.yaml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/agents.yaml"; exit 1; }
+  [[ -f "${RUNTIME_ROOT}/routing.yaml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/routing.yaml"; exit 1; }
+  [[ -f "${RUNTIME_ROOT}/tools.yaml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/tools.yaml"; exit 1; }
+  [[ -f "${RUNTIME_ROOT}/escalation.yaml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/escalation.yaml"; exit 1; }
+  [[ -f "${RUNTIME_ROOT}/channels.yaml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/channels.yaml"; exit 1; }
+  [[ -f "${RUNTIME_ROOT}/model-runtime.yml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/model-runtime.yml"; exit 1; }
+  [[ -f "${RUNTIME_ROOT}/opensearch.yml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/opensearch.yml"; exit 1; }
+  [[ -f "${RUNTIME_MODELS_FILE}" ]] || { log_error "Missing runtime config: ${RUNTIME_MODELS_FILE}"; exit 1; }
 }
 
 load_env() {
   # shellcheck disable=SC1090
   set -a
-  source "${ENV_FILE}"
+  source "${RUNTIME_ENV_FILE}"
   # shellcheck disable=SC1090
-  source "${CONTAINER_ENV_FILE}"
+  source "${RUNTIME_CONTAINER_ENV_FILE}"
   set +a
 }
 
@@ -118,7 +138,7 @@ main() {
   require_runtime_files
   load_env
 
-  log_info "Validating compose service status."
+  log_info "Validating compose service status using runtime root ${RUNTIME_ROOT}."
   compose ps
 
   ensure_service_running "openclaw"

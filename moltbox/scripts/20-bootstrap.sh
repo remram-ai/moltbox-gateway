@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Moltbox bootstrap routine.
-# Creates runtime env files, starts the stack, and pre-pulls the local routing model.
+# Creates runtime files under ~/.openclaw, starts the stack, and pre-pulls the local routing model.
 
 timestamp() { date +"%Y-%m-%dT%H:%M:%S%z"; }
 log_info() { echo "[$(timestamp)] [INFO] $*"; }
@@ -12,17 +12,41 @@ log_error() { echo "[$(timestamp)] [ERROR] $*" >&2; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOLTBOX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_DIR="${MOLTBOX_DIR}/config"
+OPENCLAW_TEMPLATE_DIR="${MOLTBOX_DIR}/.openclaw"
 COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
-ENV_FILE="${CONFIG_DIR}/.env"
-ENV_EXAMPLE="${CONFIG_DIR}/.env.example"
-CONTAINER_ENV_FILE="${CONFIG_DIR}/container.env"
-CONTAINER_ENV_EXAMPLE="${CONFIG_DIR}/container.env.example"
+ENV_TEMPLATE="${CONFIG_DIR}/.env.example"
+CONTAINER_ENV_TEMPLATE="${CONFIG_DIR}/container.env.example"
+MODEL_RUNTIME_TEMPLATE="${CONFIG_DIR}/model-runtime.yml"
+OPENSEARCH_TEMPLATE="${CONFIG_DIR}/opensearch.yml"
+MODELS_TEMPLATE="${CONFIG_DIR}/models.json"
+
+resolve_runtime_root() {
+  local target_user="${SUDO_USER:-${USER}}"
+  local target_home=""
+
+  if command -v getent >/dev/null 2>&1; then
+    target_home="$(getent passwd "${target_user}" | cut -d: -f6)"
+  fi
+
+  if [[ -z "${target_home}" ]]; then
+    target_home="${HOME}"
+  fi
+
+  printf '%s\n' "${MOLTBOX_RUNTIME_ROOT:-${target_home}/.openclaw}"
+}
+
+RUNTIME_ROOT="$(resolve_runtime_root)"
+RUNTIME_ENV_FILE="${RUNTIME_ROOT}/.env"
+RUNTIME_CONTAINER_ENV_FILE="${RUNTIME_ROOT}/container.env"
+RUNTIME_MODEL_RUNTIME_FILE="${RUNTIME_ROOT}/model-runtime.yml"
+RUNTIME_OPENSEARCH_FILE="${RUNTIME_ROOT}/opensearch.yml"
+RUNTIME_MODELS_FILE="${RUNTIME_ROOT}/agents/main/agent/models.json"
 
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
-    docker "$@"
+    env "MOLTBOX_RUNTIME_ROOT=${RUNTIME_ROOT}" docker "$@"
   else
-    sudo docker "$@"
+    sudo env "MOLTBOX_RUNTIME_ROOT=${RUNTIME_ROOT}" docker "$@"
   fi
 }
 
@@ -42,23 +66,40 @@ require_host_cmd() {
   fi
 }
 
-ensure_env_files() {
-  require_file "${ENV_EXAMPLE}"
-  require_file "${CONTAINER_ENV_EXAMPLE}"
+copy_if_missing() {
+  local source_path="$1"
+  local dest_path="$2"
 
-  if [[ ! -f "${ENV_FILE}" ]]; then
-    cp "${ENV_EXAMPLE}" "${ENV_FILE}"
-    log_info "Created ${ENV_FILE} from example."
-  else
-    log_info "Using existing ${ENV_FILE}."
-  fi
+  require_file "${source_path}"
+  mkdir -p "$(dirname "${dest_path}")"
 
-  if [[ ! -f "${CONTAINER_ENV_FILE}" ]]; then
-    cp "${CONTAINER_ENV_EXAMPLE}" "${CONTAINER_ENV_FILE}"
-    log_info "Created ${CONTAINER_ENV_FILE} from example."
+  if [[ ! -f "${dest_path}" ]]; then
+    cp "${source_path}" "${dest_path}"
+    log_info "Created ${dest_path} from template."
   else
-    log_info "Using existing ${CONTAINER_ENV_FILE}."
+    log_info "Using existing ${dest_path}."
   fi
+}
+
+ensure_runtime_dirs() {
+  mkdir -p "${RUNTIME_ROOT}"
+  mkdir -p "${RUNTIME_ROOT}/agents/main/agent"
+  mkdir -p "${RUNTIME_ROOT}/logs"
+}
+
+ensure_runtime_templates() {
+  ensure_runtime_dirs
+
+  copy_if_missing "${ENV_TEMPLATE}" "${RUNTIME_ENV_FILE}"
+  copy_if_missing "${CONTAINER_ENV_TEMPLATE}" "${RUNTIME_CONTAINER_ENV_FILE}"
+  copy_if_missing "${MODEL_RUNTIME_TEMPLATE}" "${RUNTIME_MODEL_RUNTIME_FILE}"
+  copy_if_missing "${OPENSEARCH_TEMPLATE}" "${RUNTIME_OPENSEARCH_FILE}"
+  copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/agents.yaml" "${RUNTIME_ROOT}/agents.yaml"
+  copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/channels.yaml" "${RUNTIME_ROOT}/channels.yaml"
+  copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/routing.yaml" "${RUNTIME_ROOT}/routing.yaml"
+  copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/tools.yaml" "${RUNTIME_ROOT}/tools.yaml"
+  copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/escalation.yaml" "${RUNTIME_ROOT}/escalation.yaml"
+  copy_if_missing "${MODELS_TEMPLATE}" "${RUNTIME_MODELS_FILE}"
 }
 
 require_key() {
@@ -71,23 +112,23 @@ require_key() {
 }
 
 validate_required_keys() {
-  require_key "${ENV_FILE}" "OPENCLAW_IMAGE"
-  require_key "${ENV_FILE}" "OPENCLAW_GATEWAY_BIND"
-  require_key "${ENV_FILE}" "OPENCLAW_GATEWAY_TOKEN"
-  require_key "${ENV_FILE}" "OLLAMA_IMAGE"
-  require_key "${ENV_FILE}" "OPENSEARCH_IMAGE"
-  require_key "${ENV_FILE}" "GATEWAY_PORT"
-  require_key "${ENV_FILE}" "ESCALATION_MAX_TOKENS"
-  require_key "${ENV_FILE}" "ESCALATION_DAILY_USD_CAP"
-  require_key "${CONTAINER_ENV_FILE}" "LOCAL_ROUTING_MODEL"
-  require_key "${CONTAINER_ENV_FILE}" "OLLAMA_BASE_URL"
-  require_key "${CONTAINER_ENV_FILE}" "OPENSEARCH_URL"
-  require_key "${CONTAINER_ENV_FILE}" "CLOUD_PROVIDER"
+  require_key "${RUNTIME_ENV_FILE}" "OPENCLAW_IMAGE"
+  require_key "${RUNTIME_ENV_FILE}" "OPENCLAW_GATEWAY_BIND"
+  require_key "${RUNTIME_ENV_FILE}" "OPENCLAW_GATEWAY_TOKEN"
+  require_key "${RUNTIME_ENV_FILE}" "OLLAMA_IMAGE"
+  require_key "${RUNTIME_ENV_FILE}" "OPENSEARCH_IMAGE"
+  require_key "${RUNTIME_ENV_FILE}" "GATEWAY_PORT"
+  require_key "${RUNTIME_ENV_FILE}" "ESCALATION_MAX_TOKENS"
+  require_key "${RUNTIME_ENV_FILE}" "ESCALATION_DAILY_USD_CAP"
+  require_key "${RUNTIME_CONTAINER_ENV_FILE}" "LOCAL_ROUTING_MODEL"
+  require_key "${RUNTIME_CONTAINER_ENV_FILE}" "OLLAMA_BASE_URL"
+  require_key "${RUNTIME_CONTAINER_ENV_FILE}" "OPENSEARCH_URL"
+  require_key "${RUNTIME_CONTAINER_ENV_FILE}" "CLOUD_PROVIDER"
 }
 
 ensure_gateway_token() {
   local token_value
-  token_value="$(grep -E '^OPENCLAW_GATEWAY_TOKEN=' "${ENV_FILE}" | head -n1 | cut -d= -f2-)"
+  token_value="$(grep -E '^OPENCLAW_GATEWAY_TOKEN=' "${RUNTIME_ENV_FILE}" | head -n1 | cut -d= -f2-)"
   if [[ -z "${token_value}" || "${token_value}" == "CHANGE_ME_STRONG_TOKEN" ]]; then
     local generated_token=""
     if command -v openssl >/dev/null 2>&1; then
@@ -96,22 +137,22 @@ ensure_gateway_token() {
       generated_token="$(date +%s%N | sha256sum | cut -c1-48)"
     fi
 
-    sed -i "s|^OPENCLAW_GATEWAY_TOKEN=.*$|OPENCLAW_GATEWAY_TOKEN=${generated_token}|" "${ENV_FILE}"
-    log_warn "OPENCLAW_GATEWAY_TOKEN was unset/placeholder. Generated and saved a strong token in ${ENV_FILE}."
+    sed -i "s|^OPENCLAW_GATEWAY_TOKEN=.*$|OPENCLAW_GATEWAY_TOKEN=${generated_token}|" "${RUNTIME_ENV_FILE}"
+    log_warn "OPENCLAW_GATEWAY_TOKEN was unset/placeholder. Generated and saved a strong token in ${RUNTIME_ENV_FILE}."
   fi
 }
 
 load_env() {
   # shellcheck disable=SC1090
   set -a
-  source "${ENV_FILE}"
+  source "${RUNTIME_ENV_FILE}"
   # shellcheck disable=SC1090
-  source "${CONTAINER_ENV_FILE}"
+  source "${RUNTIME_CONTAINER_ENV_FILE}"
   set +a
 }
 
 compose() {
-  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose --env-file "${RUNTIME_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
 ensure_openclaw_image_available() {
@@ -145,8 +186,8 @@ pull_images() {
 bring_up_stack() {
   pull_images
 
-  log_info "Starting Moltbox stack."
-  compose up -d
+  log_info "Starting Moltbox stack using runtime config from ${RUNTIME_ROOT}."
+  compose up -d --force-recreate
 }
 
 wait_for_ollama() {
@@ -203,7 +244,7 @@ main() {
   require_host_cmd docker
   require_host_cmd curl
   require_file "${COMPOSE_FILE}"
-  ensure_env_files
+  ensure_runtime_templates
   validate_required_keys
   ensure_gateway_token
   load_env
@@ -213,6 +254,7 @@ main() {
   prepull_model
   wait_for_gateway
 
+  log_info "Runtime root: ${RUNTIME_ROOT}"
   log_info "Gateway token for first login: ${OPENCLAW_GATEWAY_TOKEN}"
   log_info "Open browser on your LAN: http://<MOLTBOX_HOST>:${GATEWAY_PORT:-18789}"
   log_info "Bootstrap complete."

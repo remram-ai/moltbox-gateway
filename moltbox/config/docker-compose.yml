@@ -4,18 +4,17 @@ version: "3.9"
 # Only the OpenClaw gateway is published to the host/LAN.
 services:
   openclaw:
-    image: "${OPENCLAW_IMAGE}"
-    container_name: "${COMPOSE_PROJECT_NAME:-moltbox}-openclaw"
+    image: "${OPENCLAW_IMAGE:-openclaw:local}"
+    container_name: "moltbox-openclaw"
     restart: unless-stopped
     init: true
     env_file:
-      - ./.env
-      - ./container.env
+      - "${MOLTBOX_RUNTIME_ROOT}/.env"
+      - "${MOLTBOX_RUNTIME_ROOT}/container.env"
     environment:
       # OpenClaw runtime defaults expected by the upstream Docker flow.
       HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN}"
     ports:
       - "${GATEWAY_PORT:-18789}:18789"
     depends_on:
@@ -24,12 +23,10 @@ services:
       opensearch:
         condition: service_healthy
     volumes:
-      # OpenClaw runtime policy/config bundle for Moltbox.
-      - ../.openclaw:/home/node/.openclaw
-      # Tiered model routing policy for local/cloud cognition.
-      - ./model-runtime.yml:/app/config/model-runtime.yml:ro
-      # Compatibility mount in OpenClaw home config surface.
-      - ./model-runtime.yml:/home/node/.openclaw/model-runtime.yml:ro
+      # OpenClaw runtime policy/config bundle lives outside the repository.
+      - "${MOLTBOX_RUNTIME_ROOT}:/home/node/.openclaw"
+      # Tiered model routing policy is loaded from runtime config.
+      - "${MOLTBOX_RUNTIME_ROOT}/model-runtime.yml:/app/config/model-runtime.yml:ro"
     networks:
       - moltbox_internal
     command:
@@ -56,12 +53,12 @@ services:
       start_period: 20s
 
   ollama:
-    image: "${OLLAMA_IMAGE}"
-    container_name: "${COMPOSE_PROJECT_NAME:-moltbox}-ollama"
+    image: "${OLLAMA_IMAGE:-ollama/ollama:0.6.4}"
+    container_name: "moltbox-ollama"
     restart: unless-stopped
     env_file:
-      - ./.env
-      - ./container.env
+      - "${MOLTBOX_RUNTIME_ROOT}/.env"
+      - "${MOLTBOX_RUNTIME_ROOT}/container.env"
     # GPU is required for local routing performance.
     gpus: all
     volumes:
@@ -77,20 +74,20 @@ services:
       start_period: 25s
 
   opensearch:
-    image: "${OPENSEARCH_IMAGE}"
-    container_name: "${COMPOSE_PROJECT_NAME:-moltbox}-opensearch"
+    image: "${OPENSEARCH_IMAGE:-opensearchproject/opensearch:2.18.0}"
+    container_name: "moltbox-opensearch"
     restart: unless-stopped
     env_file:
-      - ./.env
-      - ./container.env
+      - "${MOLTBOX_RUNTIME_ROOT}/.env"
+      - "${MOLTBOX_RUNTIME_ROOT}/container.env"
     environment:
       # Heap sizing is controlled by .env.
-      OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS}"
+      OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS:--Xms2g -Xmx2g}"
       # Runtime posture is locked to single-node internal MVP.
       discovery.type: "${DISCOVERY_TYPE:-single-node}"
       plugins.security.disabled: "${PLUGINS_SECURITY_DISABLED:-true}"
     volumes:
-      - ./opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+      - "${MOLTBOX_RUNTIME_ROOT}/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro"
       - opensearch_data:/usr/share/opensearch/data
     networks:
       - moltbox_internal

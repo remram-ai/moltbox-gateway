@@ -2,7 +2,27 @@
 
 This checklist takes a fresh Ubuntu machine to the first OpenClaw chat in Moltbox.
 
-Prerequisite: Moltbox requires a working NVIDIA driver on the host before deployment.
+## Architecture Rule
+
+Moltbox is an installer plus template repository.
+
+Repository:
+
+```text
+~/remram-gateway
+```
+
+Live runtime configuration and state:
+
+```text
+~/.openclaw
+```
+
+Containers must read runtime configuration from `~/.openclaw`. The repository must remain stateless templates and scripts.
+
+## 0. Prerequisite: NVIDIA Driver Health
+
+Moltbox requires a working NVIDIA driver on the host before deployment.
 
 ```bash
 nvidia-smi
@@ -10,59 +30,67 @@ nvidia-smi
 
 `nvidia-smi` must succeed. If it fails, fix NVIDIA driver installation before continuing.
 
-1. Power on the machine, log in, and verify the OS is Ubuntu.
+## 1. Verify Ubuntu
 
 ```bash
 cat /etc/os-release
 ```
 
-`cat /etc/os-release` confirms the host OS; `scripts/10-install.sh` requires Ubuntu.
+`scripts/10-install.sh` requires Ubuntu.
 
-2. Install Git so you can clone the repositories.
+## 2. Add the Non-Interactive Shell Guard
+
+Before using VS Code Remote-SSH or other remote tooling, ensure `~/.bashrc` does not print output during non-interactive shells.
+
+Add this block at the top of `~/.bashrc`:
+
+```bash
+# Prevent non-interactive shells from emitting output (breaks VSCode Remote-SSH)
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+```
+
+This prevents Remote-SSH handshake failures caused by shell startup output.
+
+## 3. Install Git and Clone the Repository
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git
-```
-
-`sudo apt-get update` refreshes package indexes.  
-`sudo apt-get install -y git` installs Git non-interactively.
-
-3. Clone the Moltbox repository and enter the Moltbox directory.
-
-```bash
 cd ~
 git clone https://github.com/Remram-AI/remram-gateway.git
 cd ~/remram-gateway/moltbox
 ```
 
-`cd ~` moves to your home directory.  
-`git clone ...` retrieves the project.  
-`cd ~/remram-gateway/moltbox` enters the Moltbox profile folder.
-
-4. Run the Moltbox host installer script.
+## 4. Run the Host Installer
 
 ```bash
 bash ./scripts/10-install.sh
 ```
 
-`bash ./scripts/10-install.sh` installs/configures Docker, Docker Compose, `curl`, NVIDIA Container Toolkit, enforces GPU readiness, ensures Docker daemon availability, and sets required OpenSearch kernel settings.
+`scripts/10-install.sh` installs or validates:
 
-If Docker commands fail without `sudo` after this step, either:
-- log out and log back in, or
-- run `newgrp docker`
+- Docker Engine
+- Docker Compose plugin
+- `curl`
+- NVIDIA Container Toolkit
+- host GPU readiness via `nvidia-smi`
+- Docker daemon availability
+- `vm.max_map_count=262144` for OpenSearch
 
-This applies docker-group membership changes from the installer.
+If Docker commands fail without `sudo` after this step, either log out and back in or run `newgrp docker`.
 
-5. Confirm GPU driver visibility on the host.
+## 5. Confirm GPU Driver Visibility
 
 ```bash
 nvidia-smi
 ```
 
-`nvidia-smi` must succeed before continuing, because the Ollama service is configured with `gpus: all`.
+`nvidia-smi` must succeed before continuing because the Ollama service is configured with `gpus: all`.
 
-6. Build the required local OpenClaw image (`openclaw:local`).
+## 6. Build the Required Local OpenClaw Image
 
 ```bash
 cd ~
@@ -71,17 +99,24 @@ cd ~/openclaw
 sudo docker build -t openclaw:local .
 ```
 
-`git clone ...openclaw...` gets the OpenClaw source.  
-`sudo docker build -t openclaw:local .` creates the exact image name Moltbox expects by default (`OPENCLAW_IMAGE=openclaw:local`).
+This creates the image name Moltbox expects by default: `OPENCLAW_IMAGE=openclaw:local`.
 
-7. Bootstrap the Moltbox stack.
+## 7. Bootstrap the Moltbox Runtime
 
 ```bash
 cd ~/remram-gateway/moltbox
 bash ./scripts/20-bootstrap.sh
 ```
 
-`bash ./scripts/20-bootstrap.sh` creates `config/.env` and `config/container.env` (if missing), starts the stack, pre-pulls the local routing model, and waits for gateway readiness.
+Bootstrap performs the following:
+
+- creates `~/.openclaw`
+- creates `~/.openclaw/agents/main/agent`
+- copies repository templates into `~/.openclaw` only when the runtime files are missing
+- preserves existing runtime files on subsequent runs
+- starts the container stack
+- pre-pulls the local routing model
+- waits for gateway readiness
 
 If bootstrap times out on a slower machine, rerun with longer waits:
 
@@ -89,41 +124,128 @@ If bootstrap times out on a slower machine, rerun with longer waits:
 BOOTSTRAP_OLLAMA_WAIT_SECONDS=180 BOOTSTRAP_GATEWAY_WAIT_SECONDS=180 bash ./scripts/20-bootstrap.sh
 ```
 
-These environment variables are read by the bootstrap script to extend readiness wait windows.
-
-8. Run the Moltbox validation script.
+## 8. Validate the Stack
 
 ```bash
 bash ./scripts/30-validate.sh
 ```
 
-`bash ./scripts/30-validate.sh` verifies container health, gateway endpoints, internal service connectivity, and internal-only port exposure policy.
+`scripts/30-validate.sh` verifies:
+
+- container health
+- gateway endpoints
+- OpenClaw to Ollama connectivity
+- OpenClaw to OpenSearch connectivity
+- internal-only port exposure policy
 
 Signal integration is optional for this checklist and does not block first web chat.
 
-9. Verify health endpoints directly from the host.
+## 9. Manual Compose Context
+
+For direct `docker compose` commands, export the runtime root and run from the compose directory:
 
 ```bash
-curl -fsS http://127.0.0.1:18789/healthz
-curl -fsS http://127.0.0.1:18789/readyz
+export MOLTBOX_RUNTIME_ROOT="$HOME/.openclaw"
+cd ~/remram-gateway/moltbox/config
 ```
 
-These commands confirm the OpenClaw gateway is live and ready on the published host port.
+## 10. Post-Install Validation Commands
 
-10. Get the gateway token and the host LAN IP.
+Check container state:
 
 ```bash
-grep '^OPENCLAW_GATEWAY_TOKEN=' ./config/.env | cut -d= -f2-
+docker compose ps
+```
+
+Check OpenClaw configuration:
+
+```bash
+docker exec moltbox-openclaw openclaw doctor
+```
+
+Check gateway endpoints:
+
+```bash
+curl http://127.0.0.1:18789/healthz
+curl http://127.0.0.1:18789/readyz
+```
+
+## 11. Verify the Gateway Token
+
+Read the token from the runtime env file:
+
+```bash
+grep '^OPENCLAW_GATEWAY_TOKEN=' ~/.openclaw/.env | cut -d= -f2-
+```
+
+Verify the running container sees the same token:
+
+```bash
+docker exec -it moltbox-openclaw env | grep OPENCLAW_GATEWAY_TOKEN
+```
+
+If you change `~/.openclaw/.env`, restart the stack:
+
+```bash
+docker compose restart
+```
+
+If the container still reports the previous token after restart, rerun:
+
+```bash
+cd ~/remram-gateway/moltbox
+bash ./scripts/20-bootstrap.sh
+```
+
+This forces the stack to reconcile against the current runtime files in `~/.openclaw`.
+
+## 12. Open the Gateway and Send the First Chat
+
+Get the host LAN IP:
+
+```bash
 hostname -I
 ```
 
-`grep ...OPENCLAW_GATEWAY_TOKEN... | cut ...` prints only the login token value.  
-`hostname -I` may print multiple addresses; use the LAN IP (for example `192.168.x.x`), not loopback (`127.0.0.1`) or Docker bridge addresses.
+Use the LAN IP, not loopback (`127.0.0.1`) or Docker bridge addresses.
 
-11. Open OpenClaw and send the first chat message.
+Open OpenClaw:
 
-In a browser:
 - On the Moltbox machine: `http://127.0.0.1:18789`
 - From another LAN device: `http://<MOLTBOX_LAN_IP>:18789`
 
-When prompted, enter the token from Step 10, then send your first message (example: `Hello Moltbox`).
+When prompted, enter the token from `~/.openclaw/.env` and send the first message.
+
+## 13. Remote Development Workflow
+
+Recommended tooling:
+
+- VS Code
+- Remote-SSH extension
+
+Example SSH config:
+
+```sshconfig
+Host moltbox
+    HostName <MOLTBOX_IP>
+    User jpekovitch
+```
+
+Recommended folder to open:
+
+```text
+/home/jpekovitch/remram-gateway
+```
+
+For live runtime edits, also open:
+
+```text
+/home/jpekovitch/.openclaw
+```
+
+This avoids SCP and lets you edit:
+
+- `~/.openclaw/.env`
+- `~/.openclaw/model-runtime.yml`
+- `~/remram-gateway/moltbox/config/docker-compose.yml`
+- repository templates under `~/remram-gateway/moltbox/`

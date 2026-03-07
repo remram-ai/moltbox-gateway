@@ -1,3 +1,8 @@
+# ARCHIVAL DOCUMENT - DO NOT FOLLOW FOR DEPLOYMENT
+
+Use `moltbox-operator-runbook.md` for the current deployment workflow.
+This guide is retained for historical context only and contains older path and script references.
+
 # Moltbox - Implementation Guide
 
 ## Title Page

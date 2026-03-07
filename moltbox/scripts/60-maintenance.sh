@@ -15,6 +15,24 @@ CONFIG_DIR="${MOLTBOX_DIR}/config"
 COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
 VALIDATE_SCRIPT="${SCRIPT_DIR}/30-validate.sh"
 
+resolve_runtime_root() {
+  local target_user="${SUDO_USER:-${USER}}"
+  local target_home=""
+
+  if command -v getent >/dev/null 2>&1; then
+    target_home="$(getent passwd "${target_user}" | cut -d: -f6)"
+  fi
+
+  if [[ -z "${target_home}" ]]; then
+    target_home="${HOME}"
+  fi
+
+  printf '%s\n' "${MOLTBOX_RUNTIME_ROOT:-${target_home}/.openclaw}"
+}
+
+RUNTIME_ROOT="$(resolve_runtime_root)"
+RUNTIME_ENV_FILE="${RUNTIME_ROOT}/.env"
+
 DO_PULL=false
 DO_RESTART=false
 DO_PRUNE=false
@@ -22,9 +40,9 @@ SERVICE=""
 
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
-    docker "$@"
+    env "MOLTBOX_RUNTIME_ROOT=${RUNTIME_ROOT}" docker "$@"
   else
-    sudo docker "$@"
+    sudo env "MOLTBOX_RUNTIME_ROOT=${RUNTIME_ROOT}" docker "$@"
   fi
 }
 
@@ -44,7 +62,7 @@ EOF
 }
 
 compose() {
-  docker_cmd compose -f "${COMPOSE_FILE}" "$@"
+  docker_cmd compose --env-file "${RUNTIME_ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
 require_host_cmd() {
@@ -138,7 +156,7 @@ run_validation() {
     exit 1
   fi
   log_info "Running post-maintenance validation."
-  bash "${VALIDATE_SCRIPT}"
+  MOLTBOX_RUNTIME_ROOT="${RUNTIME_ROOT}" bash "${VALIDATE_SCRIPT}"
 }
 
 main() {
