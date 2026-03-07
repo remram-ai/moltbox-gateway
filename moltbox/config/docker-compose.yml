@@ -9,8 +9,8 @@ services:
     restart: unless-stopped
     init: true
     env_file:
-      - "${MOLTBOX_RUNTIME_ROOT}/.env"
-      - "${MOLTBOX_RUNTIME_ROOT}/container.env"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}/.env"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}/container.env"
     environment:
       # OpenClaw runtime defaults expected by the upstream Docker flow.
       HOME: /home/node
@@ -24,9 +24,9 @@ services:
         condition: service_healthy
     volumes:
       # OpenClaw runtime policy/config bundle lives outside the repository.
-      - "${MOLTBOX_RUNTIME_ROOT}:/home/node/.openclaw"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}:/home/node/.openclaw"
       # Tiered model routing policy is loaded from runtime config.
-      - "${MOLTBOX_RUNTIME_ROOT}/model-runtime.yml:/app/config/model-runtime.yml:ro"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}/model-runtime.yml:/app/config/model-runtime.yml:ro"
     networks:
       - moltbox_internal
     command:
@@ -57,8 +57,8 @@ services:
     container_name: "moltbox-ollama"
     restart: unless-stopped
     env_file:
-      - "${MOLTBOX_RUNTIME_ROOT}/.env"
-      - "${MOLTBOX_RUNTIME_ROOT}/container.env"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}/.env"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}/container.env"
     # GPU is required for local routing performance.
     gpus: all
     volumes:
@@ -78,8 +78,8 @@ services:
     container_name: "moltbox-opensearch"
     restart: unless-stopped
     env_file:
-      - "${MOLTBOX_RUNTIME_ROOT}/.env"
-      - "${MOLTBOX_RUNTIME_ROOT}/container.env"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}/.env"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}/container.env"
     environment:
       # Heap sizing is controlled by .env.
       OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS:--Xms2g -Xmx2g}"
@@ -87,7 +87,7 @@ services:
       discovery.type: "${DISCOVERY_TYPE:-single-node}"
       plugins.security.disabled: "${PLUGINS_SECURITY_DISABLED:-true}"
     volumes:
-      - "${MOLTBOX_RUNTIME_ROOT}/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro"
+      - "${MOLTBOX_RUNTIME_ROOT:-$HOME/.openclaw}/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro"
       - opensearch_data:/usr/share/opensearch/data
     networks:
       - moltbox_internal

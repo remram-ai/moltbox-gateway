@@ -11,7 +11,7 @@ This repository is an installer and template source.
 Repository:
 
 ```text
-~/remram-gateway
+~/git/remram-gateway
 ```
 
 Live runtime configuration and state:
@@ -23,6 +23,7 @@ Live runtime configuration and state:
 The `moltbox/.openclaw/` and `moltbox/config/` directories contain templates only. `scripts/20-bootstrap.sh` copies those templates into `~/.openclaw` on first run and leaves existing runtime files in place on subsequent runs.
 
 Containers must read runtime configuration from `~/.openclaw`, not from repository paths.
+They must never read live configuration from `~/git/remram-gateway`.
 
 ## Repository Structure
 
@@ -73,12 +74,20 @@ For manual Docker Compose operations, export the runtime root first:
 
 ```bash
 export MOLTBOX_RUNTIME_ROOT="$HOME/.openclaw"
-cd ~/remram-gateway/moltbox/config
+cd ~/git/remram-gateway/moltbox/config
 docker compose ps
 ```
+
+Quick runtime mount verification:
+
+```bash
+docker inspect moltbox-openclaw | grep openclaw
+```
+
+Expected output should reference `~/.openclaw` and never the repository.
 
 ## Remote Development
 
 Recommended workflow: VS Code with Remote-SSH connected directly to the Moltbox host.
 
-Edit runtime files under `~/.openclaw` for live configuration changes. Edit repository files under `~/remram-gateway/moltbox/` only when changing templates, scripts, or compose definitions.
+Edit runtime files under `~/.openclaw` for live configuration changes. Edit repository files under `~/git/remram-gateway/moltbox/` only when changing templates, scripts, or compose definitions.

@@ -11,6 +11,7 @@ log_error() { echo "[$(timestamp)] [ERROR] $*" >&2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOLTBOX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${MOLTBOX_DIR}/.." && pwd)"
 CONFIG_DIR="${MOLTBOX_DIR}/config"
 OPENCLAW_TEMPLATE_DIR="${MOLTBOX_DIR}/.openclaw"
 COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
@@ -36,11 +37,13 @@ resolve_runtime_root() {
 }
 
 RUNTIME_ROOT="$(resolve_runtime_root)"
+USER_HOME="$(getent passwd "${SUDO_USER:-${USER}}" | cut -d: -f6 2>/dev/null || printf '%s\n' "${HOME}")"
 RUNTIME_ENV_FILE="${RUNTIME_ROOT}/.env"
 RUNTIME_CONTAINER_ENV_FILE="${RUNTIME_ROOT}/container.env"
 RUNTIME_MODEL_RUNTIME_FILE="${RUNTIME_ROOT}/model-runtime.yml"
 RUNTIME_OPENSEARCH_FILE="${RUNTIME_ROOT}/opensearch.yml"
 RUNTIME_MODELS_FILE="${RUNTIME_ROOT}/agents/main/agent/models.json"
+GIT_WORKSPACE_ROOT="${USER_HOME}/git"
 
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
@@ -74,10 +77,18 @@ copy_if_missing() {
   mkdir -p "$(dirname "${dest_path}")"
 
   if [[ ! -f "${dest_path}" ]]; then
+    log_info "Creating runtime file ${dest_path}"
     cp "${source_path}" "${dest_path}"
-    log_info "Created ${dest_path} from template."
   else
-    log_info "Using existing ${dest_path}."
+    log_info "Runtime file exists, skipping: ${dest_path}"
+  fi
+}
+
+enforce_runtime_outside_git_workspace() {
+  if [[ "${RUNTIME_ROOT}" == "${GIT_WORKSPACE_ROOT}"* ]]; then
+    log_error "Runtime root cannot be inside ~/git workspace: ${RUNTIME_ROOT}"
+    log_error "Set MOLTBOX_RUNTIME_ROOT outside the git directory."
+    exit 1
   fi
 }
 
@@ -244,6 +255,9 @@ main() {
   require_host_cmd docker
   require_host_cmd curl
   require_file "${COMPOSE_FILE}"
+  enforce_runtime_outside_git_workspace
+  log_info "Repository root: ${REPO_ROOT}"
+  log_info "Runtime root: ${RUNTIME_ROOT}"
   ensure_runtime_templates
   validate_required_keys
   ensure_gateway_token

@@ -9,6 +9,25 @@ log_info() { echo "[$(timestamp)] [INFO] $*"; }
 log_warn() { echo "[$(timestamp)] [WARN] $*" >&2; }
 log_error() { echo "[$(timestamp)] [ERROR] $*" >&2; }
 
+resolve_target_home() {
+  local target_user="${SUDO_USER:-${USER}}"
+  local target_home=""
+
+  if command -v getent >/dev/null 2>&1; then
+    target_home="$(getent passwd "${target_user}" | cut -d: -f6)"
+  fi
+
+  if [[ -z "${target_home}" ]]; then
+    target_home="${HOME}"
+  fi
+
+  printf '%s\n' "${target_home}"
+}
+
+TARGET_HOME="$(resolve_target_home)"
+GIT_WORKSPACE="${TARGET_HOME}/git"
+RECOMMENDED_REPO_PATH="${GIT_WORKSPACE}/remram-gateway"
+
 require_linux_ubuntu() {
   if [[ "$(uname -s)" != "Linux" ]]; then
     log_error "This script must run on Linux."
@@ -41,6 +60,21 @@ ensure_curl() {
   log_info "Installing curl (required by Moltbox scripts)."
   ${SUDO} apt-get update
   ${SUDO} apt-get install -y curl
+}
+
+ensure_git_workspace() {
+  log_info "Ensuring git workspace exists at ${GIT_WORKSPACE}."
+  mkdir -p "${GIT_WORKSPACE}"
+}
+
+recommend_git_workspace_location() {
+  local current_repo_root
+  current_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+  if [[ "${current_repo_root}" != "${GIT_WORKSPACE}"/* ]]; then
+    log_info "Recommended install location:"
+    log_info "${RECOMMENDED_REPO_PATH}"
+  fi
 }
 
 install_docker_if_missing() {
@@ -190,6 +224,8 @@ post_checks() {
 
 main() {
   require_linux_ubuntu
+  ensure_git_workspace
+  recommend_git_workspace_location
   ensure_curl
   install_docker_if_missing
   ensure_docker_group_membership

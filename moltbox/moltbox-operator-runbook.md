@@ -9,7 +9,7 @@ Moltbox is an installer plus template repository.
 Repository:
 
 ```text
-~/remram-gateway
+~/git/remram-gateway
 ```
 
 Live runtime configuration and state:
@@ -19,6 +19,7 @@ Live runtime configuration and state:
 ```
 
 Containers must read runtime configuration from `~/.openclaw`. The repository must remain stateless templates and scripts.
+Containers must never read live runtime configuration from `~/git/remram-gateway`.
 
 ## 0. Prerequisite: NVIDIA Driver Health
 
@@ -60,8 +61,9 @@ This prevents Remote-SSH handshake failures caused by shell startup output.
 sudo apt-get update
 sudo apt-get install -y git
 cd ~
-git clone https://github.com/Remram-AI/remram-gateway.git
-cd ~/remram-gateway/moltbox
+mkdir -p ~/git
+git clone https://github.com/Remram-AI/remram-gateway.git ~/git/remram-gateway
+cd ~/git/remram-gateway/moltbox
 ```
 
 ## 4. Run the Host Installer
@@ -79,6 +81,7 @@ bash ./scripts/10-install.sh
 - host GPU readiness via `nvidia-smi`
 - Docker daemon availability
 - `vm.max_map_count=262144` for OpenSearch
+- `~/git` workspace existence for repository checkout hygiene
 
 If Docker commands fail without `sudo` after this step, either log out and back in or run `newgrp docker`.
 
@@ -104,7 +107,7 @@ This creates the image name Moltbox expects by default: `OPENCLAW_IMAGE=openclaw
 ## 7. Bootstrap the Moltbox Runtime
 
 ```bash
-cd ~/remram-gateway/moltbox
+cd ~/git/remram-gateway/moltbox
 bash ./scripts/20-bootstrap.sh
 ```
 
@@ -146,7 +149,7 @@ For direct `docker compose` commands, export the runtime root and run from the c
 
 ```bash
 export MOLTBOX_RUNTIME_ROOT="$HOME/.openclaw"
-cd ~/remram-gateway/moltbox/config
+cd ~/git/remram-gateway/moltbox/config
 ```
 
 ## 10. Post-Install Validation Commands
@@ -193,7 +196,7 @@ docker compose restart
 If the container still reports the previous token after restart, rerun:
 
 ```bash
-cd ~/remram-gateway/moltbox
+cd ~/git/remram-gateway/moltbox
 bash ./scripts/20-bootstrap.sh
 ```
 
@@ -234,7 +237,7 @@ Host moltbox
 Recommended folder to open:
 
 ```text
-/home/jpekovitch/remram-gateway
+/home/jpekovitch/git/remram-gateway
 ```
 
 For live runtime edits, also open:
@@ -247,5 +250,5 @@ This avoids SCP and lets you edit:
 
 - `~/.openclaw/.env`
 - `~/.openclaw/model-runtime.yml`
-- `~/remram-gateway/moltbox/config/docker-compose.yml`
-- repository templates under `~/remram-gateway/moltbox/`
+- `~/git/remram-gateway/moltbox/config/docker-compose.yml`
+- repository templates under `~/git/remram-gateway/moltbox/`
