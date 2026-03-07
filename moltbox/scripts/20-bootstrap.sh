@@ -20,7 +20,6 @@ ENV_TEMPLATE="${CONFIG_DIR}/.env.example"
 CONTAINER_ENV_TEMPLATE="${CONFIG_DIR}/container.env.example"
 MODEL_RUNTIME_TEMPLATE="${CONFIG_DIR}/model-runtime.yml"
 OPENSEARCH_TEMPLATE="${CONFIG_DIR}/opensearch.yml"
-MODELS_TEMPLATE="${CONFIG_DIR}/models.json"
 
 resolve_runtime_root() {
   local target_user="${SUDO_USER:-${USER}}"
@@ -44,7 +43,10 @@ RUNTIME_OPENCLAW_CONFIG_FILE="${RUNTIME_ROOT}/openclaw.json"
 RUNTIME_CONTAINER_ENV_FILE="${RUNTIME_ROOT}/container.env"
 RUNTIME_MODEL_RUNTIME_FILE="${RUNTIME_ROOT}/model-runtime.yml"
 RUNTIME_OPENSEARCH_FILE="${RUNTIME_ROOT}/opensearch.yml"
-RUNTIME_MODELS_FILE="${RUNTIME_ROOT}/agents/main/agent/models.json"
+RUNTIME_AGENT_DIR="${RUNTIME_ROOT}/agents/main/agent"
+RUNTIME_MODELS_FILE="${RUNTIME_AGENT_DIR}/models.json"
+RUNTIME_AUTH_PROFILES_FILE="${RUNTIME_AGENT_DIR}/auth-profiles.json"
+RUNTIME_AGENT_CONFIG_FILE="${RUNTIME_AGENT_DIR}/agent-config.json"
 GIT_WORKSPACE_ROOT="${USER_HOME}/git"
 
 docker_cmd() {
@@ -107,7 +109,7 @@ enforce_runtime_outside_git_workspace() {
 
 ensure_runtime_dirs() {
   mkdir -p "${RUNTIME_ROOT}"
-  mkdir -p "${RUNTIME_ROOT}/agents/main/agent"
+  mkdir -p "${RUNTIME_AGENT_DIR}"
   mkdir -p "${RUNTIME_ROOT}/logs"
 }
 
@@ -124,7 +126,39 @@ ensure_runtime_templates() {
   copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/routing.yaml" "${RUNTIME_ROOT}/routing.yaml"
   copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/tools.yaml" "${RUNTIME_ROOT}/tools.yaml"
   copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/escalation.yaml" "${RUNTIME_ROOT}/escalation.yaml"
-  copy_if_missing "${MODELS_TEMPLATE}" "${RUNTIME_MODELS_FILE}"
+}
+
+remove_zero_length_file() {
+  local path="$1"
+  local label="$2"
+
+  if [[ -f "${path}" && ! -s "${path}" ]]; then
+    log_warn "Removing zero-byte ${label}: $(display_path "${path}")"
+    rm -f "${path}"
+  fi
+}
+
+remove_invalid_seeded_models_json() {
+  if [[ ! -f "${RUNTIME_MODELS_FILE}" ]]; then
+    return
+  fi
+
+  if grep -Eq '"(local_routing_model|cloud_reasoning_model|deep_thinking_model|coding_model)"' "${RUNTIME_MODELS_FILE}"; then
+    local backup_path="${RUNTIME_MODELS_FILE}.moltbox-invalid-template.bak"
+    if [[ ! -f "${backup_path}" ]]; then
+      cp "${RUNTIME_MODELS_FILE}" "${backup_path}"
+      log_warn "Backed up invalid seeded models.json to $(display_path "${backup_path}")"
+    fi
+    log_warn "Removing invalid seeded models.json so OpenClaw can regenerate it."
+    rm -f "${RUNTIME_MODELS_FILE}"
+  fi
+}
+
+reconcile_agent_runtime_files() {
+  remove_zero_length_file "${RUNTIME_MODELS_FILE}" "models registry"
+  remove_zero_length_file "${RUNTIME_AUTH_PROFILES_FILE}" "auth profile store"
+  remove_zero_length_file "${RUNTIME_AGENT_CONFIG_FILE}" "agent config"
+  remove_invalid_seeded_models_json
 }
 
 ensure_gateway_mode_local() {
@@ -268,6 +302,67 @@ prepull_model() {
   compose exec -T ollama ollama pull "${model}"
 }
 
+show_discovery_diagnostics() {
+  log_warn "OpenClaw model discovery diagnostics:"
+  log_warn "--- openclaw models list ---"
+  compose exec -T openclaw openclaw models list || true
+  log_warn "--- /home/node/.openclaw/openclaw.json ---"
+  compose exec -T openclaw sh -lc 'cat /home/node/.openclaw/openclaw.json' || true
+  log_warn "--- curl http://ollama:11434/api/tags ---"
+  compose exec -T openclaw sh -lc 'curl -fsS http://ollama:11434/api/tags' || true
+}
+
+assert_ollama_model_registered() {
+  local model="${LOCAL_ROUTING_MODEL:-qwen3:8b}"
+  local model_ref="ollama/${model}"
+  local model_list=""
+
+  if ! model_list="$(compose exec -T openclaw openclaw models list 2>&1)"; then
+    log_error "Failed to read OpenClaw model registry."
+    printf '%s\n' "${model_list}" >&2
+    show_discovery_diagnostics
+    return 1
+  fi
+
+  if ! awk -v ref="${model_ref}" '
+    $1 == ref {
+      found = 1
+      if ($0 ~ /missing/) {
+        missing = 1
+      }
+    }
+    END {
+      exit(found == 1 && missing != 1 ? 0 : 1)
+    }
+  ' <<<"${model_list}"; then
+    log_error "OpenClaw did not register ${model_ref} in its model registry."
+    printf '%s\n' "${model_list}" >&2
+    show_discovery_diagnostics
+    return 1
+  fi
+
+  log_info "Confirmed OpenClaw registered ${model_ref}."
+}
+
+configure_ollama_provider() {
+  log_info "Configuring OpenClaw Ollama provider for Docker service DNS (http://ollama:11434)."
+  compose exec -T openclaw openclaw config set models.providers.ollama.baseUrl '"http://ollama:11434"'
+  compose exec -T openclaw openclaw config set models.providers.ollama.api '"ollama"'
+  compose exec -T openclaw openclaw config set models.providers.ollama.apiKey '"ollama-local"'
+
+  log_info "Triggering OpenClaw model discovery."
+  if ! compose exec -T openclaw openclaw models discover; then
+    log_warn "openclaw models discover failed; falling back to openclaw models list to force registry generation."
+    if ! compose exec -T openclaw sh -lc 'openclaw models list >/dev/null'; then
+      log_error "OpenClaw model discovery failed."
+      show_discovery_diagnostics
+      return 1
+    fi
+  fi
+
+  assert_ollama_model_registered
+}
+
 wait_for_gateway() {
   local port="${GATEWAY_PORT:-18789}"
   local sleep_seconds="${BOOTSTRAP_WAIT_INTERVAL_SECONDS:-2}"
@@ -298,6 +393,7 @@ main() {
   log_info "Repository root: ${REPO_ROOT}"
   log_info "Runtime root: ${RUNTIME_ROOT}"
   ensure_runtime_templates
+  reconcile_agent_runtime_files
   ensure_gateway_mode_local
   validate_required_keys
   ensure_gateway_token
@@ -307,6 +403,7 @@ main() {
   wait_for_ollama
   prepull_model
   wait_for_gateway
+  configure_ollama_provider
 
   log_info "Runtime root: ${RUNTIME_ROOT}"
   log_info "Gateway token for first login: ${OPENCLAW_GATEWAY_TOKEN}"

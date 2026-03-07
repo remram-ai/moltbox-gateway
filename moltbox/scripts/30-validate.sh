@@ -32,7 +32,10 @@ resolve_runtime_root() {
 RUNTIME_ROOT="$(resolve_runtime_root)"
 RUNTIME_ENV_FILE="${RUNTIME_ROOT}/.env"
 RUNTIME_CONTAINER_ENV_FILE="${RUNTIME_ROOT}/container.env"
-RUNTIME_MODELS_FILE="${RUNTIME_ROOT}/agents/main/agent/models.json"
+RUNTIME_AGENT_DIR="${RUNTIME_ROOT}/agents/main/agent"
+RUNTIME_MODELS_FILE="${RUNTIME_AGENT_DIR}/models.json"
+RUNTIME_AUTH_PROFILES_FILE="${RUNTIME_AGENT_DIR}/auth-profiles.json"
+RUNTIME_AGENT_CONFIG_FILE="${RUNTIME_AGENT_DIR}/agent-config.json"
 
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
@@ -58,6 +61,7 @@ require_runtime_files() {
   [[ -f "${COMPOSE_FILE}" ]] || { log_error "Missing compose file: ${COMPOSE_FILE}"; exit 1; }
   [[ -f "${RUNTIME_ENV_FILE}" ]] || { log_error "Missing runtime env file: ${RUNTIME_ENV_FILE}"; exit 1; }
   [[ -f "${RUNTIME_CONTAINER_ENV_FILE}" ]] || { log_error "Missing runtime container env file: ${RUNTIME_CONTAINER_ENV_FILE}"; exit 1; }
+  [[ -f "${RUNTIME_ROOT}/openclaw.json" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/openclaw.json"; exit 1; }
   [[ -f "${RUNTIME_ROOT}/agents.yaml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/agents.yaml"; exit 1; }
   [[ -f "${RUNTIME_ROOT}/routing.yaml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/routing.yaml"; exit 1; }
   [[ -f "${RUNTIME_ROOT}/tools.yaml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/tools.yaml"; exit 1; }
@@ -66,6 +70,15 @@ require_runtime_files() {
   [[ -f "${RUNTIME_ROOT}/model-runtime.yml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/model-runtime.yml"; exit 1; }
   [[ -f "${RUNTIME_ROOT}/opensearch.yml" ]] || { log_error "Missing runtime config: ${RUNTIME_ROOT}/opensearch.yml"; exit 1; }
   [[ -f "${RUNTIME_MODELS_FILE}" ]] || { log_error "Missing runtime config: ${RUNTIME_MODELS_FILE}"; exit 1; }
+}
+
+assert_file_not_empty_if_present() {
+  local path="$1"
+  local label="$2"
+  if [[ -f "${path}" && ! -s "${path}" ]]; then
+    log_error "${label} is zero bytes: ${path}"
+    exit 1
+  fi
 }
 
 load_env() {
@@ -132,6 +145,47 @@ assert_internal_only_ports() {
   fi
 }
 
+check_agent_runtime_files() {
+  assert_file_not_empty_if_present "${RUNTIME_MODELS_FILE}" "OpenClaw models.json"
+  assert_file_not_empty_if_present "${RUNTIME_AUTH_PROFILES_FILE}" "OpenClaw auth-profiles.json"
+  assert_file_not_empty_if_present "${RUNTIME_AGENT_CONFIG_FILE}" "OpenClaw agent-config.json"
+}
+
+check_ollama_model_registry() {
+  local model="${LOCAL_ROUTING_MODEL:-qwen3:8b}"
+  local model_ref="ollama/${model}"
+  local model_list=""
+
+  log_info "Checking OpenClaw model registry for ${model_ref}."
+  if ! model_list="$(compose exec -T openclaw openclaw models list 2>&1)"; then
+    log_error "Failed to read OpenClaw model registry."
+    printf '%s\n' "${model_list}" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "${model_list}" | grep -F "ollama/" >/dev/null || {
+    log_error "OpenClaw model registry does not contain any Ollama models. Provider configuration failed."
+    printf '%s\n' "${model_list}" >&2
+    exit 1
+  }
+
+  if ! awk -v ref="${model_ref}" '
+    $1 == ref {
+      found = 1
+      if ($0 ~ /missing/) {
+        missing = 1
+      }
+    }
+    END {
+      exit(found == 1 && missing != 1 ? 0 : 1)
+    }
+  ' <<<"${model_list}"; then
+    log_error "OpenClaw model registry did not register ${model_ref}. Ollama provider configuration or discovery failed."
+    printf '%s\n' "${model_list}" >&2
+    exit 1
+  fi
+}
+
 main() {
   require_host_cmd docker
   require_host_cmd curl
@@ -151,6 +205,8 @@ main() {
 
   check_gateway
   check_internal_connectivity
+  check_agent_runtime_files
+  check_ollama_model_registry
   assert_internal_only_ports
 
   log_info "Validation passed."
