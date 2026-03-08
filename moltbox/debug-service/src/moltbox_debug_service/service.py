@@ -85,27 +85,27 @@ class MoltboxDebugService:
         self._register_tools()
 
     def _register_tools(self) -> None:
-        @self.mcp.tool()
+        @self.mcp.tool(description="Inspect the selected Moltbox runtime, container health, and gateway readiness.")
         async def runtime_status(runtime: str = "prod", ctx: Context | None = None) -> dict:
             self._enforce_scope(ctx, "runtime_status")
             return self._runtime_status(runtime)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Read recent OpenClaw container logs for the selected runtime.")
         async def logs_openclaw(runtime: str = "prod", tail_lines: int = 200, ctx: Context | None = None) -> dict:
             self._enforce_scope(ctx, "logs_openclaw")
             return self._logs(runtime, "openclaw", tail_lines)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Read recent Ollama container logs for the selected runtime.")
         async def logs_ollama(runtime: str = "prod", tail_lines: int = 200, ctx: Context | None = None) -> dict:
             self._enforce_scope(ctx, "logs_ollama")
             return self._logs(runtime, "ollama", tail_lines)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Read recent OpenSearch container logs for the selected runtime.")
         async def logs_opensearch(runtime: str = "prod", tail_lines: int = 200, ctx: Context | None = None) -> dict:
             self._enforce_scope(ctx, "logs_opensearch")
             return self._logs(runtime, "opensearch", tail_lines)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Read bounded logs for a specific service in the selected runtime.")
         async def tail_logs(
             runtime: str = "prod",
             service: str = "openclaw",
@@ -116,12 +116,12 @@ class MoltboxDebugService:
             self._enforce_scope(ctx, "tail_logs")
             return self._logs(runtime, service, tail_lines, since_seconds)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Inspect the status and result envelope for an async debug-service job.")
         async def job_status(job_id: str, ctx: Context | None = None) -> dict:
             self._enforce_scope(ctx, "job_status")
             return self.jobs.get(job_id)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Read the captured stdout and stderr tail for an async debug-service job.")
         async def job_output(job_id: str, tail_lines: int = 200, ctx: Context | None = None) -> dict:
             self._enforce_scope(ctx, "job_output")
             return self.jobs.tail_output(job_id, max(1, min(tail_lines, self.config.max_log_lines)))
@@ -135,51 +135,51 @@ class MoltboxDebugService:
             self._enforce_scope(ctx, operation)
             return self._submit_async(operation, runtime, handler)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Run OpenClaw doctor checks against the selected runtime as an async job.")
         async def openclaw_doctor(runtime: str = "prod", ctx: Context | None = None) -> dict:
             return await launch("openclaw_doctor", runtime, lambda job_id: self._openclaw_doctor(runtime, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Run the Moltbox stack validation script against the selected runtime as an async job.")
         async def validate_stack(runtime: str = "prod", ctx: Context | None = None) -> dict:
             return await launch("validate_stack", runtime, lambda job_id: self._run_script(runtime, "30-validate.sh", job_id, "validate_stack"), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Collect a diagnostics bundle for the selected runtime as an async job.")
         async def collect_diagnostics(runtime: str = "prod", ctx: Context | None = None) -> dict:
             return await launch("collect_diagnostics", runtime, lambda job_id: self._collect_diagnostics(runtime, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Start the selected Moltbox runtime stack as an async job.")
         async def start_stack(runtime: str = "prod", ctx: Context | None = None) -> dict:
             return await launch("start_stack", runtime, lambda job_id: self._start_stack(runtime, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Stop the selected Moltbox runtime stack as an async job.")
         async def stop_stack(runtime: str = "prod", ctx: Context | None = None) -> dict:
             return await launch("stop_stack", runtime, lambda job_id: self._stop_stack(runtime, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Restart the selected Moltbox runtime stack as an async job.")
         async def restart_stack(runtime: str = "prod", ctx: Context | None = None) -> dict:
             return await launch("restart_stack", runtime, lambda job_id: self._restart_stack(runtime, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Create or reset the disposable Moltbox test runtime and worktree as an async job.")
         async def create_test_runtime(force_recreate: bool = False, ctx: Context | None = None) -> dict:
             return await launch("create_test_runtime", "test", lambda job_id: self._create_test_runtime(force_recreate, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Start the Moltbox test runtime stack as an async job.")
         async def start_test_stack(ctx: Context | None = None) -> dict:
             return await launch("start_test_stack", "test", lambda job_id: self._start_stack("test", job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Stop and remove the Moltbox test runtime, worktree, and test artifacts as an async job.")
         async def destroy_test_stack(force: bool = False, ctx: Context | None = None) -> dict:
             return await launch("destroy_test_stack", "test", lambda job_id: self._destroy_test_runtime(force, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Create a timestamped backup archive of the selected runtime as an async job.")
         async def backup_runtime(runtime: str = "prod", include_logs: bool = True, ctx: Context | None = None) -> dict:
             return await launch("backup_runtime", runtime, lambda job_id: self._backup_runtime(runtime, include_logs, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Apply a restricted unified diff patch to the disposable test worktree as an async job.")
         async def patch_repo(patch: str, runtime: str = "test", ctx: Context | None = None) -> dict:
             return await launch("patch_repo", runtime, lambda job_id: self._patch_repo(runtime, patch, job_id), ctx)
 
-        @self.mcp.tool()
+        @self.mcp.tool(description="Run the Moltbox bootstrap script against the selected runtime as an async job.")
         async def run_bootstrap(runtime: str = "prod", ctx: Context | None = None) -> dict:
             return await launch("run_bootstrap", runtime, lambda job_id: self._run_script(runtime, "20-bootstrap.sh", job_id, "run_bootstrap"), ctx)
 
