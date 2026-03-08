@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.lowlevel.server import TransportSecuritySettings
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.routing import Mount
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
