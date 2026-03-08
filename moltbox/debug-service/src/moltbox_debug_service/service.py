@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.lowlevel.server import TransportSecuritySettings
 from starlette.routing import Mount
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
@@ -46,6 +47,18 @@ TRUSTED_HOSTS = [
     "moltbox-prime.local",
     "*.local",
 ]
+MCP_ALLOWED_HOSTS = [
+    "localhost",
+    "localhost:*",
+    "127.0.0.1",
+    "127.0.0.1:*",
+    "moltbox-prime",
+    "moltbox-prime:*",
+    "moltbox-prime.local",
+    "moltbox-prime.local:*",
+    "192.168.1.189",
+    "192.168.1.189:*",
+]
 
 
 class MoltboxDebugService:
@@ -61,6 +74,10 @@ class MoltboxDebugService:
             instructions="Controlled developer API for the Moltbox runtime.",
             stateless_http=True,
             json_response=True,
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=MCP_ALLOWED_HOSTS,
+            ),
         )
         self.mcp.settings.streamable_http_path = "/"
         self.mcp.settings.host = "0.0.0.0"
