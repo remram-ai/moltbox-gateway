@@ -162,6 +162,8 @@ Bootstrap performs the following:
 - verifies OpenClaw can reach `http://ollama:11434/api/tags`
 - primes the Ollama model registry with `openclaw models list --all --provider ollama`
 - waits for gateway readiness
+- creates `~/.openclaw/debug-service/config.json` and `~/.openclaw/debug-service/clients.json` if missing
+- ensures `DEBUG_SERVICE_TOKEN` exists in `~/.openclaw/.env`
 
 If bootstrap times out on a slower machine, rerun with longer waits:
 
@@ -200,6 +202,29 @@ This writes a timestamped archive to `/tmp/moltbox-debug-YYYYMMDD-HHMMSS.tar.gz`
 
 Attach that archive to the bug report or troubleshooting thread before applying a runtime reset.
 
+## 10a. Install The Moltbox Debug Service
+
+Install the host-level MCP debug service after bootstrap has created `~/.openclaw`:
+
+```bash
+cd ~/git/remram-gateway/moltbox
+bash ./scripts/70-debug-service.sh install
+sudo systemctl start moltbox-debug-service.service
+```
+
+The service reads:
+
+- `DEBUG_SERVICE_TOKEN` from `~/.openclaw/.env`
+- `~/.openclaw/debug-service/config.json`
+- `~/.openclaw/debug-service/clients.json`
+
+Useful service commands:
+
+```bash
+bash ./scripts/70-debug-service.sh status
+bash ./scripts/70-debug-service.sh logs
+```
+
 ## 11. Manual Compose Context
 
 For direct `docker compose` commands, export the runtime root and run from the compose directory:
@@ -220,7 +245,7 @@ docker compose ps
 Check OpenClaw configuration:
 
 ```bash
-docker exec moltbox-openclaw openclaw doctor
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw doctor
 ```
 
 Check gateway endpoints:
@@ -234,11 +259,11 @@ Confirm runtime provider configuration:
 
 ```bash
 grep '^TOGETHER_API_KEY=' ~/.openclaw/container.env
-docker exec moltbox-openclaw openclaw config get models.providers.ollama.baseUrl
-docker exec moltbox-openclaw openclaw config get agents.defaults.model.primary
-docker exec moltbox-openclaw openclaw config get agents.defaults.model.fallbacks[0]
-docker exec moltbox-openclaw openclaw models list --all --provider ollama
-docker exec moltbox-openclaw openclaw models status
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw config get models.providers.ollama.baseUrl
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw config get agents.defaults.model.primary
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw config get agents.defaults.model.fallbacks[0]
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw models list --all --provider ollama
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw models status
 ```
 
 ## Escalation MVP
@@ -258,9 +283,9 @@ Verify installation:
 ```bash
 grep -n 'REMRAM_ESCALATION_MVP' ~/.openclaw/workspace/AGENTS.md
 ls ~/.openclaw/extensions/remram-escalate
-docker exec moltbox-openclaw test -f /app/remram-gateway/schemas/remram-request-packet.schema.json
-docker exec moltbox-openclaw openclaw plugins info remram-escalate
-docker exec moltbox-openclaw openclaw config get plugins.entries.remram-escalate.enabled
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" test -f /app/remram-gateway/schemas/remram-request-packet.schema.json
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw plugins info remram-escalate
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw config get plugins.entries.remram-escalate.enabled
 ```
 
 Telemetry appears in the footer appended to the final assistant answer, for example:
@@ -279,7 +304,7 @@ Final tokens: 921 -> 312
 Disable the feature:
 
 ```bash
-docker exec moltbox-openclaw openclaw plugins disable remram-escalate
+docker exec "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" openclaw plugins disable remram-escalate
 export MOLTBOX_RUNTIME_ROOT="$HOME/.openclaw"
 cd ~/git/remram-gateway/moltbox/config
 docker compose --env-file "$MOLTBOX_RUNTIME_ROOT/.env" restart openclaw
@@ -304,7 +329,7 @@ grep '^OPENCLAW_GATEWAY_TOKEN=' ~/.openclaw/.env | cut -d= -f2-
 Verify the running container sees the same token:
 
 ```bash
-docker exec -it moltbox-openclaw env | grep OPENCLAW_GATEWAY_TOKEN
+docker exec -it "${OPENCLAW_CONTAINER_NAME:-moltbox-openclaw}" env | grep OPENCLAW_GATEWAY_TOKEN
 ```
 
 If you change `~/.openclaw/.env`, restart the stack:
@@ -321,6 +346,14 @@ bash ./scripts/20-bootstrap.sh
 ```
 
 This forces the stack to reconcile against the current runtime files in `~/.openclaw`.
+
+## 13a. Verify The Debug Service Token
+
+Read the debug service token from the runtime env file:
+
+```bash
+grep '^DEBUG_SERVICE_TOKEN=' ~/.openclaw/.env | cut -d= -f2-
+```
 
 ## 14. Reset Runtime State Without Reinstalling
 

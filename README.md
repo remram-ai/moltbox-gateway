@@ -54,6 +54,7 @@ After bootstrap, the runtime root should look like:
   tools.yaml
   escalation.yaml
   agents/main/agent/models.json
+  debug-service/
   logs/
 ```
 
@@ -69,6 +70,7 @@ Typical lifecycle:
 2. Build or supply the OpenClaw image referenced by `OPENCLAW_IMAGE`.
 3. Run [`20-bootstrap.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/20-bootstrap.sh) to create `~/.openclaw` and start the stack.
 4. Run [`30-validate.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/30-validate.sh) to verify container health and internal connectivity.
+5. Run [`70-debug-service.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/70-debug-service.sh) `install` to provision the host-level Moltbox debug service.
 
 For manual Docker Compose operations, export the runtime root first:
 
@@ -81,7 +83,7 @@ docker compose ps
 Quick runtime mount verification:
 
 ```bash
-docker inspect moltbox-openclaw | grep openclaw
+docker inspect "$(grep '^OPENCLAW_CONTAINER_NAME=' ~/.openclaw/.env | cut -d= -f2- || echo moltbox-openclaw)" | grep openclaw
 ```
 
 Expected output should reference `~/.openclaw` and never the repository.

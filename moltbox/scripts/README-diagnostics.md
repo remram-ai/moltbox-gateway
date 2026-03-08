@@ -5,8 +5,8 @@
 ## What It Collects
 
 - `system/`: `uname -a`, `/etc/os-release`, `uptime`, `df -h`, `free -h`, `ip addr`, `ss -tulpn`, and `ps aux`
-- `docker/`: `docker ps -a`, `docker images`, `docker volume ls`, `docker network ls`, `docker info`, plus `docker inspect` and `docker top` for `moltbox-openclaw`, `moltbox-ollama`, and `moltbox-opensearch`
-- `logs/`: `docker logs` for `moltbox-openclaw`, `moltbox-ollama`, and `moltbox-opensearch`
+- `docker/`: `docker ps -a`, `docker images`, `docker volume ls`, `docker network ls`, `docker info`, plus `docker inspect` and `docker top` for the runtime-configured OpenClaw, Ollama, and OpenSearch container names
+- `logs/`: `docker logs` for the runtime-configured OpenClaw, Ollama, and OpenSearch containers
 - `runtime/`: a redacted copy of `~/.openclaw`
 - `config/`: a redacted copy of `~/git/remram-gateway/moltbox/config` when present, otherwise the current repository `moltbox/config`
 - `models/`: `openclaw doctor`, `openclaw models list`, and the Ollama tags API response

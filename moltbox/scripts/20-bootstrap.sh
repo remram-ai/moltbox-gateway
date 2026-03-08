@@ -22,6 +22,8 @@ ENV_TEMPLATE="${CONFIG_DIR}/.env.example"
 CONTAINER_ENV_TEMPLATE="${CONFIG_DIR}/container.env.example"
 MODEL_RUNTIME_TEMPLATE="${CONFIG_DIR}/model-runtime.yml"
 OPENSEARCH_TEMPLATE="${CONFIG_DIR}/opensearch.yml"
+DEBUG_SERVICE_CONFIG_TEMPLATE="${CONFIG_DIR}/debug-service.config.json.example"
+DEBUG_SERVICE_CLIENTS_TEMPLATE="${CONFIG_DIR}/debug-service.clients.json.example"
 ESCALATION_INSTALL_SCRIPT="${SCRIPT_DIR}/install-escalation-agent.sh"
 CANONICAL_SCHEMA_FILE="${REPO_ROOT}/schemas/remram-request-packet.schema.json"
 OPENCLAW_REDACTED_SECRET="__OPENCLAW_REDACTED__"
@@ -48,6 +50,9 @@ RUNTIME_OPENCLAW_CONFIG_FILE="${RUNTIME_ROOT}/openclaw.json"
 RUNTIME_CONTAINER_ENV_FILE="${RUNTIME_ROOT}/container.env"
 RUNTIME_MODEL_RUNTIME_FILE="${RUNTIME_ROOT}/model-runtime.yml"
 RUNTIME_OPENSEARCH_FILE="${RUNTIME_ROOT}/opensearch.yml"
+RUNTIME_DEBUG_SERVICE_DIR="${RUNTIME_ROOT}/debug-service"
+RUNTIME_DEBUG_SERVICE_CONFIG_FILE="${RUNTIME_DEBUG_SERVICE_DIR}/config.json"
+RUNTIME_DEBUG_SERVICE_CLIENTS_FILE="${RUNTIME_DEBUG_SERVICE_DIR}/clients.json"
 RUNTIME_AGENT_DIR="${RUNTIME_ROOT}/agents/main/agent"
 RUNTIME_MODELS_FILE="${RUNTIME_AGENT_DIR}/models.json"
 RUNTIME_AUTH_PROFILES_FILE="${RUNTIME_AGENT_DIR}/auth-profiles.json"
@@ -175,6 +180,7 @@ ensure_runtime_dirs() {
   mkdir -p "${RUNTIME_ROOT}"
   mkdir -p "${RUNTIME_AGENT_DIR}"
   mkdir -p "${RUNTIME_ROOT}/logs"
+  mkdir -p "${RUNTIME_DEBUG_SERVICE_DIR}"
 }
 
 ensure_runtime_templates() {
@@ -185,6 +191,8 @@ ensure_runtime_templates() {
   copy_if_missing "${CONTAINER_ENV_TEMPLATE}" "${RUNTIME_CONTAINER_ENV_FILE}"
   copy_if_missing "${MODEL_RUNTIME_TEMPLATE}" "${RUNTIME_MODEL_RUNTIME_FILE}"
   copy_if_missing "${OPENSEARCH_TEMPLATE}" "${RUNTIME_OPENSEARCH_FILE}"
+  copy_if_missing "${DEBUG_SERVICE_CONFIG_TEMPLATE}" "${RUNTIME_DEBUG_SERVICE_CONFIG_FILE}"
+  copy_if_missing "${DEBUG_SERVICE_CLIENTS_TEMPLATE}" "${RUNTIME_DEBUG_SERVICE_CLIENTS_FILE}"
   copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/agents.yaml" "${RUNTIME_ROOT}/agents.yaml"
   copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/channels.yaml" "${RUNTIME_ROOT}/channels.yaml"
   copy_if_missing "${OPENCLAW_TEMPLATE_DIR}/routing.yaml" "${RUNTIME_ROOT}/routing.yaml"
@@ -195,6 +203,8 @@ ensure_runtime_templates() {
 ensure_runtime_env_defaults() {
   upsert_env_key "${RUNTIME_CONTAINER_ENV_FILE}" "OPENSEARCH_JAVA_OPTS" "\"-Xms2g -Xmx2g\""
   log_info "Ensured runtime config: $(display_path "${RUNTIME_CONTAINER_ENV_FILE}") contains OPENSEARCH_JAVA_OPTS=\"-Xms2g -Xmx2g\""
+  upsert_env_key "${RUNTIME_ENV_FILE}" "DEBUG_SERVICE_PORT" "18890"
+  log_info "Ensured runtime config: $(display_path "${RUNTIME_ENV_FILE}") contains DEBUG_SERVICE_PORT=18890"
 }
 
 ensure_together_api_key() {
@@ -406,6 +416,7 @@ validate_required_keys() {
   require_key "${RUNTIME_ENV_FILE}" "OPENCLAW_IMAGE"
   require_key "${RUNTIME_ENV_FILE}" "OPENCLAW_GATEWAY_BIND"
   require_key "${RUNTIME_ENV_FILE}" "OPENCLAW_GATEWAY_TOKEN"
+  require_key "${RUNTIME_ENV_FILE}" "DEBUG_SERVICE_TOKEN"
   require_key "${RUNTIME_ENV_FILE}" "OLLAMA_IMAGE"
   require_key "${RUNTIME_ENV_FILE}" "OPENSEARCH_IMAGE"
   require_key "${RUNTIME_ENV_FILE}" "GATEWAY_PORT"
@@ -436,6 +447,22 @@ ensure_gateway_token() {
   fi
 }
 
+ensure_debug_service_token() {
+  local token_value
+  token_value="$(grep -E '^DEBUG_SERVICE_TOKEN=' "${RUNTIME_ENV_FILE}" | head -n1 | cut -d= -f2-)"
+  if [[ -z "${token_value}" || "${token_value}" == "CHANGE_ME_DEBUG_SERVICE_TOKEN" ]]; then
+    local generated_token=""
+    if command -v openssl >/dev/null 2>&1; then
+      generated_token="$(openssl rand -hex 24)"
+    else
+      generated_token="$(date +%s%N | sha256sum | cut -c1-48)"
+    fi
+
+    sed -i "s|^DEBUG_SERVICE_TOKEN=.*$|DEBUG_SERVICE_TOKEN=${generated_token}|" "${RUNTIME_ENV_FILE}"
+    log_warn "DEBUG_SERVICE_TOKEN was unset/placeholder. Generated and saved a strong token in ${RUNTIME_ENV_FILE}."
+  fi
+}
+
 load_env() {
   # shellcheck disable=SC1090
   set -a
@@ -449,6 +476,7 @@ validate_runtime_values() {
   require_non_empty_env "OPENCLAW_IMAGE"
   require_non_empty_env "OPENCLAW_GATEWAY_BIND"
   require_non_empty_env "OPENCLAW_GATEWAY_TOKEN"
+  require_non_empty_env "DEBUG_SERVICE_TOKEN"
   require_non_empty_env "OLLAMA_IMAGE"
   require_non_empty_env "OPENSEARCH_IMAGE"
   require_non_empty_env "GATEWAY_PORT"
@@ -487,6 +515,11 @@ validate_runtime_values() {
 
   if [[ "${OPENCLAW_GATEWAY_TOKEN}" == "CHANGE_ME_STRONG_TOKEN" ]]; then
     log_error "OPENCLAW_GATEWAY_TOKEN is still set to the placeholder value."
+    exit 1
+  fi
+
+  if [[ "${DEBUG_SERVICE_TOKEN}" == "CHANGE_ME_DEBUG_SERVICE_TOKEN" ]]; then
+    log_error "DEBUG_SERVICE_TOKEN is still set to the placeholder value."
     exit 1
   fi
 
@@ -752,6 +785,7 @@ main() {
   ensure_gateway_mode_local
   validate_required_keys
   ensure_gateway_token
+  ensure_debug_service_token
   load_env
   validate_runtime_values
   local host_ip
