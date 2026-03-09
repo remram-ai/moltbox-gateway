@@ -802,7 +802,13 @@ class MoltboxDebugService:
         flow["refs"]["test_branch"] = test_refs["branch"]
         self.flows.write(flow["flow_id"], flow)
 
-        bootstrapped = self._run_script("test", "20-bootstrap.sh", job_id, "publish_branch_bootstrap_test")
+        bootstrapped = self._run_script(
+            "test",
+            "20-bootstrap.sh",
+            job_id,
+            "publish_branch_bootstrap_test",
+            allow_prod_running_for_test=True,
+        )
         self._record_publish_step(flow, "bootstrap_test_runtime", bootstrapped)
         if not bootstrapped["ok"]:
             return self._fail_publish_flow(flow, "Bootstrapping the test runtime failed", bootstrapped)
@@ -1385,9 +1391,17 @@ class MoltboxDebugService:
         result["operation"] = "openclaw_doctor"
         return result
 
-    def _run_script(self, runtime: str, script_name: str, job_id: str, operation_name: str | None = None) -> dict:
+    def _run_script(
+        self,
+        runtime: str,
+        script_name: str,
+        job_id: str,
+        operation_name: str | None = None,
+        *,
+        allow_prod_running_for_test: bool = False,
+    ) -> dict:
         ctx = self._load_runtime(runtime)
-        if runtime == "test" and script_name == "20-bootstrap.sh":
+        if runtime == "test" and script_name == "20-bootstrap.sh" and not allow_prod_running_for_test:
             self._ensure_test_runtime_idle()
         result = self._run_command(
             ctx,
