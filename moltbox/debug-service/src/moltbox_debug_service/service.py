@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -1810,7 +1811,13 @@ class MoltboxDebugService:
             )
 
     def _write_env_file(self, path: Path, values: dict[str, str]) -> None:
-        path.write_text("".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8")
+        lines: list[str] = []
+        for key, value in values.items():
+            rendered = value
+            if any(char.isspace() for char in value) or any(char in value for char in "\"'#$`\\"):
+                rendered = shlex.quote(value)
+            lines.append(f"{key}={rendered}\n")
+        path.write_text("".join(lines), encoding="utf-8")
 
     def _resolve_remote_script(self, ctx: RuntimeContext, script_name: str) -> Path:
         if not script_name or Path(script_name).name != script_name or not script_name.endswith(".sh"):
