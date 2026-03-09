@@ -332,13 +332,59 @@ detect_host_name() {
   printf '%s\n' "${host_name}"
 }
 
+detect_trusted_proxy_candidates() {
+  if [[ "${OPENCLAW_TRUSTED_PROXIES_AUTO:-true}" != "true" ]]; then
+    return 0
+  fi
+
+  local network_ids=""
+  local inspect_json=""
+
+  network_ids="$(docker_cmd network ls --filter driver=bridge --quiet 2>/dev/null | tr '\n' ' ')"
+  if [[ -z "${network_ids//[[:space:]]/}" ]]; then
+    return 0
+  fi
+
+  inspect_json="$(docker_cmd network inspect ${network_ids} 2>/dev/null || true)"
+  if [[ -z "${inspect_json//[[:space:]]/}" ]]; then
+    return 0
+  fi
+
+  python3 - "${inspect_json}" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except json.JSONDecodeError:
+    raise SystemExit(0)
+
+values = []
+for network in payload:
+    ipam = network.get("IPAM") or {}
+    for config in ipam.get("Config") or []:
+        gateway = (config or {}).get("Gateway")
+        if isinstance(gateway, str) and gateway and gateway not in values:
+            values.append(gateway)
+    for container in (network.get("Containers") or {}).values():
+        ipv4 = (container or {}).get("IPv4Address")
+        if isinstance(ipv4, str) and ipv4:
+            address = ipv4.split("/", 1)[0].strip()
+            if address and address not in values:
+                values.append(address)
+
+print(",".join(values))
+PY
+}
+
 ensure_openclaw_runtime_json() {
   local host_ip="$1"
   local host_name="$2"
   local gateway_port="$3"
   local trusted_proxies_csv="${4:-}"
+  local extra_allowed_origins_csv="${5:-}"
 
-  python3 - "${RUNTIME_OPENCLAW_CONFIG_FILE}" "${host_ip}" "${host_name}" "${gateway_port}" "${trusted_proxies_csv}" <<'PY'
+  python3 - "${RUNTIME_OPENCLAW_CONFIG_FILE}" "${host_ip}" "${host_name}" "${gateway_port}" "${trusted_proxies_csv}" "${extra_allowed_origins_csv}" <<'PY'
 import json
 import pathlib
 import sys
@@ -348,6 +394,7 @@ host_ip = sys.argv[2]
 host_name = sys.argv[3]
 gateway_port = sys.argv[4]
 trusted_proxies_csv = sys.argv[5]
+extra_allowed_origins_csv = sys.argv[6]
 
 required_origins = [
     "http://127.0.0.1",
@@ -367,6 +414,10 @@ required_origins = [
     f"http://{host_name}:{gateway_port}",
     f"https://{host_name}:{gateway_port}",
 ]
+for value in extra_allowed_origins_csv.split(","):
+    stripped = value.strip()
+    if stripped:
+        required_origins.append(stripped)
 
 try:
     data = json.loads(config_path.read_text(encoding="utf-8"))
@@ -820,11 +871,25 @@ main() {
   validate_runtime_values
   local host_ip
   local host_name
+  local auto_trusted_proxies
+  local merged_trusted_proxies
   host_ip="$(detect_host_lan_ip)"
   host_name="$(detect_host_name)"
+  auto_trusted_proxies="$(detect_trusted_proxy_candidates)"
+  merged_trusted_proxies="${OPENCLAW_TRUSTED_PROXIES:-}"
+  if [[ -n "${auto_trusted_proxies}" ]]; then
+    if [[ -n "${merged_trusted_proxies}" ]]; then
+      merged_trusted_proxies="${merged_trusted_proxies},${auto_trusted_proxies}"
+    else
+      merged_trusted_proxies="${auto_trusted_proxies}"
+    fi
+  fi
   log_info "Detected host LAN IP for control UI origins: ${host_ip}"
   log_info "Detected host name for control UI origins: ${host_name}"
-  ensure_openclaw_runtime_json "${host_ip}" "${host_name}" "${GATEWAY_PORT}" "${OPENCLAW_TRUSTED_PROXIES:-}"
+  if [[ -n "${auto_trusted_proxies}" ]]; then
+    log_info "Detected Docker-local trusted proxy candidates: ${auto_trusted_proxies}"
+  fi
+  ensure_openclaw_runtime_json "${host_ip}" "${host_name}" "${GATEWAY_PORT}" "${merged_trusted_proxies}" "${OPENCLAW_ALLOWED_ORIGINS_EXTRA:-}"
 
   bring_up_stack
   wait_for_ollama

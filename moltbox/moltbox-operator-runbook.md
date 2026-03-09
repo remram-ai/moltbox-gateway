@@ -152,7 +152,7 @@ Bootstrap performs the following:
 - preserves existing runtime files on subsequent runs
 - prompts for `TOGETHER_API_KEY` if needed and saves it to `~/.openclaw/container.env`
 - ensures `OPENSEARCH_JAVA_OPTS="-Xms2g -Xmx2g"` exists in `~/.openclaw/container.env`
-- detects the host LAN IP and hostname and writes required `gateway.controlUi.allowedOrigins` to `~/.openclaw/openclaw.json`
+- detects the host LAN IP and hostname, writes required `gateway.controlUi.allowedOrigins` to `~/.openclaw/openclaw.json`, and auto-discovers same-host Docker proxy addresses for `gateway.trustedProxies`
 - starts the container stack
 - pre-pulls the local routing model
 - configures the OpenClaw Ollama provider and default/fallback models before gateway readiness checks

@@ -52,6 +52,7 @@ MUTATING_OPERATIONS = {
     "run_script",
     "run_remote_script",
     "repo_pull",
+    "repo_checkout_ref",
 }
 TRUSTED_HOSTS = [
     "localhost",
@@ -188,8 +189,12 @@ class MoltboxDebugService:
             return await launch("restart_stack", runtime, lambda job_id: self._restart_stack(runtime, job_id), ctx)
 
         @self.mcp.tool(description="Create or reset the disposable Moltbox test runtime and worktree as an async job.")
-        async def create_test_runtime(force_recreate: bool = False, ctx: Context | None = None) -> dict:
-            return await launch("create_test_runtime", "test", lambda job_id: self._create_test_runtime(force_recreate, job_id), ctx)
+        async def create_test_runtime(
+            force_recreate: bool = False,
+            ref: str | None = None,
+            ctx: Context | None = None,
+        ) -> dict:
+            return await launch("create_test_runtime", "test", lambda job_id: self._create_test_runtime(force_recreate, ref, job_id), ctx)
 
         @self.mcp.tool(description="Start the Moltbox test runtime stack as an async job.")
         async def start_test_stack(ctx: Context | None = None) -> dict:
@@ -231,6 +236,10 @@ class MoltboxDebugService:
         @self.mcp.tool(description="Fetch and fast-forward pull the selected runtime repo from git as an async job.")
         async def repo_pull(runtime: str = "prod", branch: str | None = None, ctx: Context | None = None) -> dict:
             return await launch("repo_pull", runtime, lambda job_id: self._repo_pull(runtime, branch, job_id), ctx)
+
+        @self.mcp.tool(description="Check out a specific git ref in the selected runtime repo as an async job. Test runtime only.")
+        async def repo_checkout_ref(ref: str, runtime: str = "test", ctx: Context | None = None) -> dict:
+            return await launch("repo_checkout_ref", runtime, lambda job_id: self._repo_checkout_ref(runtime, ref, job_id), ctx)
 
         @self.mcp.tool(description="Restore a host snapshot folder with sudo /usr/local/bin/moltbox-snapshot restore as an async job.")
         async def restore_runtime_snapshot(snapshot_folder: str, ctx: Context | None = None) -> dict:
@@ -605,7 +614,7 @@ class MoltboxDebugService:
         result["operation"] = "restart_stack"
         return result
 
-    def _create_test_runtime(self, force_recreate: bool, job_id: str) -> dict:
+    def _create_test_runtime(self, force_recreate: bool, ref: str | None, job_id: str) -> dict:
         prod = self._load_runtime("prod")
         test = self._load_runtime("test")
         if test.runtime_root.exists() and any(test.runtime_root.iterdir()) and not force_recreate:
@@ -613,10 +622,13 @@ class MoltboxDebugService:
 
         self._safe_remove_path(test.runtime_root)
         self._remove_worktree(test.repo_root)
+        checkout_ref = ref or "HEAD"
+        if ref is not None:
+            self._validate_git_ref(ref)
 
         added = self._run_command(
             prod,
-            ["git", "worktree", "add", "--force", str(test.repo_root), "HEAD"],
+            ["git", "worktree", "add", "--force", str(test.repo_root), checkout_ref],
             job_id=job_id,
             timeout=self.config.long_timeout_seconds,
             cwd=prod.repo_root,
@@ -630,7 +642,11 @@ class MoltboxDebugService:
         self._prepare_test_runtime_files(test)
         ensure_runtime_dirs(test)
 
-        stdout = f"Created test runtime at {test.runtime_root}\nCreated test worktree at {test.repo_root}\n"
+        stdout = (
+            f"Created test runtime at {test.runtime_root}\n"
+            f"Created test worktree at {test.repo_root}\n"
+            f"Checked out test ref: {checkout_ref}\n"
+        )
         self.jobs.append_log(job_id, stdout)
         return {
             "ok": True,
@@ -640,6 +656,7 @@ class MoltboxDebugService:
             "stderr": "",
             "artifacts": [str(test.runtime_root), str(test.repo_root)],
             "exit_code": 0,
+            "details": {"ref": checkout_ref},
         }
 
     def _destroy_test_runtime(self, force: bool, job_id: str) -> dict:
@@ -769,6 +786,26 @@ class MoltboxDebugService:
         pulled["operation"] = "repo_pull"
         pulled["runtime"] = runtime
         return pulled
+
+    def _repo_checkout_ref(self, runtime: str, ref: str, job_id: str) -> dict:
+        if runtime != "test":
+            raise RuntimeError("repo_checkout_ref is limited to the test runtime")
+        self._validate_git_ref(ref)
+        ctx = self._load_runtime(runtime)
+        if not ctx.repo_root.exists():
+            raise RuntimeError("Test worktree does not exist; run create_test_runtime first")
+
+        result = self._run_command(
+            ctx,
+            ["git", "checkout", ref],
+            job_id=job_id,
+            timeout=self.config.long_timeout_seconds,
+            cwd=ctx.repo_root,
+        )
+        result["operation"] = "repo_checkout_ref"
+        result["runtime"] = runtime
+        result["details"] = {"ref": ref, "repo_root": str(ctx.repo_root)}
+        return result
 
     def _restore_runtime_snapshot(self, snapshot_folder: str, job_id: str) -> dict:
         ctx = self._load_runtime("prod")
