@@ -23,7 +23,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from .flows import FlowStore
 from .jobs import JobStore
 from .redaction import redact_text
-from .runtime import RuntimeContext, build_runtime, ensure_runtime_dirs, load_service_config, source_ip_allowed
+from .runtime import RuntimeContext, build_runtime, ensure_runtime_dirs, load_json, load_service_config, parse_env_file, source_ip_allowed
 
 
 TEST_GATEWAY_PORT = 18790
@@ -1738,7 +1738,7 @@ class MoltboxDebugService:
                 shutil.copy2(src, target / name)
 
     def _prepare_test_runtime_files(self, ctx: RuntimeContext) -> None:
-        env_values = dict(ctx.env_values)
+        env_values = parse_env_file(ctx.env_file)
         env_values["COMPOSE_PROJECT_NAME"] = TEST_COMPOSE_PROJECT
         env_values["GATEWAY_PORT"] = str(TEST_GATEWAY_PORT)
         env_values["DEBUG_SERVICE_PORT"] = str(TEST_DEBUG_SERVICE_PORT)
@@ -1747,7 +1747,9 @@ class MoltboxDebugService:
         env_values["OPENSEARCH_CONTAINER_NAME"] = "moltbox-test-opensearch"
         self._write_env_file(ctx.env_file, env_values)
 
-        config = ctx.openclaw_values if isinstance(ctx.openclaw_values, dict) else {}
+        config = load_json(ctx.openclaw_config_file, {})
+        if not isinstance(config, dict):
+            config = {}
         gateway = config.setdefault("gateway", {})
         control_ui = gateway.setdefault("controlUi", {})
         existing = control_ui.get("allowedOrigins")
