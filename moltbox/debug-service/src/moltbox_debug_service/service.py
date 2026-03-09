@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import base64
 import contextlib
+import hashlib
 import json
 import shlex
 import shutil
 import subprocess
 import tarfile
 import threading
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 import uvicorn
+import websockets
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -35,6 +42,8 @@ TEST_CONTROL_UI_HOSTS = ("moltbox-test",)
 ALLOWED_PATCH_PREFIXES = ("moltbox/", "schemas/")
 SNAPSHOT_TOOL = "/usr/local/bin/moltbox-snapshot"
 SNAPSHOT_ROOT = "/mnt/moltbox-backup/snapshots"
+GATEWAY_PROTOCOL_VERSION = 3
+GATEWAY_OPERATOR_SCOPES = ("operator.read", "operator.write")
 SAFE_SCRIPT_MAP = {
     "runtime_reset": "12-runtime-reset.sh",
     "bootstrap": "20-bootstrap.sh",
@@ -158,6 +167,19 @@ class MoltboxDebugService:
         async def gateway_auth_state(runtime: str = "prod", ctx: Context | None = None) -> dict:
             self._enforce_scope(ctx, "gateway_auth_state")
             return self._gateway_auth_state(runtime)
+
+        @self.mcp.tool(description="Send a one-off chat message through the selected runtime gateway and wait for the streamed assistant reply. Useful for smoke-testing agent or UX-visible changes before manual browser QA.")
+        async def chat_smoke_test(
+            message: str,
+            runtime: str = "test",
+            agent_id: str = "main",
+            session_key: str | None = None,
+            timeout_seconds: int = 45,
+            verbose_level: str = "off",
+            ctx: Context | None = None,
+        ) -> dict:
+            self._enforce_scope(ctx, "chat_smoke_test")
+            return await self._chat_smoke_test(runtime, message, agent_id, session_key, timeout_seconds, verbose_level)
 
         @self.mcp.tool(description="Inspect currently paired and pending OpenClaw devices for the selected runtime.")
         async def paired_devices(runtime: str = "prod", ctx: Context | None = None) -> dict:
@@ -566,6 +588,148 @@ class MoltboxDebugService:
                 "gateway_health": health,
                 "gateway_ready": ready,
             },
+        }
+
+    async def _chat_smoke_test(
+        self,
+        runtime: str,
+        message: str,
+        agent_id: str,
+        session_key: str | None,
+        timeout_seconds: int,
+        verbose_level: str,
+    ) -> dict:
+        ctx = self._load_runtime(runtime)
+        request_text = message.strip()
+        if not request_text:
+            raise RuntimeError("message must not be empty")
+        if not agent_id.strip():
+            raise RuntimeError("agent_id must not be empty")
+        if verbose_level not in {"off", "full"}:
+            raise RuntimeError("verbose_level must be 'off' or 'full'")
+        timeout_seconds = self._clamp_timeout(timeout_seconds)
+        token = ctx.env_values.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+        if not token:
+            raise RuntimeError(f"OPENCLAW_GATEWAY_TOKEN is empty for runtime '{runtime}'")
+
+        ws_url = f"ws://127.0.0.1:{ctx.gateway_port}"
+        resolved_session_key = session_key or self._make_smoke_session_key(agent_id)
+        assistant_chunks: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        send_payload: dict[str, Any] | None = None
+        lifecycle: dict[str, Any] | None = None
+        event_counts = {"chat": 0, "agent": 0, "assistant_deltas": 0, "tool_events": 0}
+        warnings: list[str] = []
+
+        async with websockets.connect(ws_url, ping_interval=None, close_timeout=5, open_timeout=min(timeout_seconds, 10)) as ws:
+            hello = await self._gateway_connect(ws, token)
+            if verbose_level != "off":
+                try:
+                    await self._gateway_request(ws, "sessions.patch", {"key": resolved_session_key, "verboseLevel": verbose_level}, timeout=10)
+                except RuntimeError as exc:
+                    warnings.append(f"sessions.patch failed: {exc}")
+
+            send_id = uuid.uuid4().hex
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "req",
+                        "id": send_id,
+                        "method": "chat.send",
+                        "params": {
+                            "sessionKey": resolved_session_key,
+                            "message": request_text,
+                            "idempotencyKey": f"moltbox-smoke-{uuid.uuid4().hex}",
+                        },
+                    }
+                )
+            )
+
+            deadline = asyncio.get_running_loop().time() + timeout_seconds
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise RuntimeError(f"chat_smoke_test timed out after {timeout_seconds} seconds")
+                frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
+
+                if frame.get("type") == "res" and frame.get("id") == send_id:
+                    if not frame.get("ok"):
+                        error = self._gateway_error_message(frame.get("error"))
+                        raise RuntimeError(f"chat.send failed: {error}")
+                    send_payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+                    continue
+
+                if frame.get("type") != "event":
+                    continue
+
+                event_name = str(frame.get("event") or "")
+                if event_name not in {"agent", "chat"}:
+                    continue
+                event_counts[event_name] += 1
+
+                payload = frame.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                stream = str(payload.get("stream") or "")
+                data = payload.get("data")
+                if not isinstance(data, dict):
+                    continue
+
+                if stream == "assistant":
+                    chunk = self._gateway_stream_text(data)
+                    if chunk:
+                        assistant_chunks.append(chunk)
+                        event_counts["assistant_deltas"] += 1
+                elif stream == "tool":
+                    event_counts["tool_events"] += 1
+                    tool_calls.append(
+                        {
+                            "name": data.get("name"),
+                            "phase": data.get("phase"),
+                            "tool_call_id": data.get("toolCallId"),
+                            "args": data.get("args"),
+                            "meta": data.get("meta"),
+                            "result": data.get("result"),
+                        }
+                    )
+                elif stream == "lifecycle" and data.get("phase") in {"end", "error"}:
+                    lifecycle = data
+                    break
+
+            history_payload = await self._gateway_request(ws, "chat.history", {"sessionKey": resolved_session_key}, timeout=10)
+            assistant_text = self._extract_latest_assistant_text(history_payload) or "".join(assistant_chunks).strip()
+
+        details = {
+            "runtime_root": str(ctx.runtime_root),
+            "repo_root": str(ctx.repo_root),
+            "gateway_port": ctx.gateway_port,
+            "ws_url": ws_url,
+            "agent_id": agent_id,
+            "session_key": resolved_session_key,
+            "message": request_text,
+            "assistant_text": assistant_text,
+            "assistant_text_length": len(assistant_text),
+            "trace_footer_present": self._contains_trace_footer(assistant_text),
+            "send": send_payload or {},
+            "lifecycle": lifecycle or {},
+            "tool_calls": tool_calls,
+            "event_counts": event_counts,
+            "hello": hello,
+            "warnings": warnings,
+        }
+        return {
+            "ok": True,
+            "operation": "chat_smoke_test",
+            "runtime": runtime,
+            "job_id": None,
+            "status": "succeeded",
+            "stdout": (assistant_text + "\n") if assistant_text else "",
+            "stderr": "",
+            "artifacts": [],
+            "started_at": None,
+            "finished_at": None,
+            "exit_code": 0,
+            "details": details,
         }
 
     def _repo_status(self, runtime: str) -> dict:
@@ -1943,6 +2107,181 @@ class MoltboxDebugService:
     def _origin_for_host(self, host: str, scheme: str, port: int | None) -> str:
         netloc = host if port is None else f"{host}:{port}"
         return urlunsplit((scheme, netloc, "", "", ""))
+
+    async def _gateway_connect(self, ws: Any, token: str) -> dict[str, Any]:
+        challenge = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+        if challenge.get("type") != "event" or challenge.get("event") != "connect.challenge":
+            raise RuntimeError("gateway did not send connect.challenge")
+        payload = challenge.get("payload")
+        if not isinstance(payload, dict):
+            raise RuntimeError("gateway connect.challenge payload was invalid")
+
+        nonce = str(payload.get("nonce") or "")
+        ts = int(payload.get("ts") or 0)
+        if not nonce or not ts:
+            raise RuntimeError("gateway connect.challenge was missing nonce or ts")
+
+        identity = self._generate_gateway_device_identity()
+        client = {
+            "id": "moltbox-debug-service",
+            "version": "0.1.0",
+            "platform": "linux",
+            "mode": "operator",
+        }
+        params = {
+            "minProtocol": GATEWAY_PROTOCOL_VERSION,
+            "maxProtocol": GATEWAY_PROTOCOL_VERSION,
+            "client": client,
+            "role": "operator",
+            "scopes": list(GATEWAY_OPERATOR_SCOPES),
+            "caps": ["agent-events", "tool-events"],
+            "commands": [],
+            "permissions": {},
+            "auth": {"token": token},
+            "locale": "en-US",
+            "userAgent": "moltbox-debug-service/0.1.0",
+            "device": self._sign_gateway_challenge(identity, nonce, ts, client["id"], client["mode"], token),
+        }
+        response = await self._gateway_request(ws, "connect", params, timeout=10)
+        auth = response.get("auth") if isinstance(response.get("auth"), dict) else {}
+        return {
+            "protocol": response.get("protocol"),
+            "scopes": auth.get("scopes", []),
+            "role": auth.get("role"),
+            "device_token_issued": bool(auth.get("deviceToken")),
+        }
+
+    async def _gateway_request(self, ws: Any, method: str, params: dict[str, Any], timeout: int) -> Any:
+        request_id = uuid.uuid4().hex
+        await ws.send(json.dumps({"type": "req", "id": request_id, "method": method, "params": params}))
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise RuntimeError(f"{method} timed out after {timeout} seconds")
+            frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
+            if frame.get("type") != "res" or frame.get("id") != request_id:
+                continue
+            if not frame.get("ok"):
+                raise RuntimeError(f"{method} failed: {self._gateway_error_message(frame.get('error'))}")
+            return frame.get("payload")
+
+    def _generate_gateway_device_identity(self) -> dict[str, str]:
+        private_key = ed25519.Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+        public_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        return {
+            "id": hashlib.sha256(public_bytes).hexdigest(),
+            "publicKey": self._b64url(public_bytes),
+            "privateKey": private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            ).decode("utf-8"),
+        }
+
+    def _sign_gateway_challenge(
+        self,
+        identity: dict[str, str],
+        nonce: str,
+        ts: int,
+        client_id: str,
+        client_mode: str,
+        token: str,
+    ) -> dict[str, Any]:
+        payload = "|".join(
+            [
+                "v2",
+                identity["id"],
+                client_id,
+                client_mode,
+                "operator",
+                ",".join(GATEWAY_OPERATOR_SCOPES),
+                str(ts),
+                token,
+                nonce,
+            ]
+        )
+        private_key = serialization.load_pem_private_key(identity["privateKey"].encode("utf-8"), password=None)
+        signature = private_key.sign(payload.encode("utf-8"))
+        return {
+            "id": identity["id"],
+            "publicKey": identity["publicKey"],
+            "signature": self._b64url(signature),
+            "signedAt": ts,
+            "nonce": nonce,
+        }
+
+    def _b64url(self, value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).decode("utf-8").rstrip("=")
+
+    def _make_smoke_session_key(self, agent_id: str) -> str:
+        stamp = datetime.now(tz=UTC).strftime("%Y%m%d%H%M%S")
+        return f"agent:{agent_id}:moltbox-smoke-{stamp}-{uuid.uuid4().hex[:8]}"
+
+    def _gateway_error_message(self, error: Any) -> str:
+        if isinstance(error, dict):
+            code = str(error.get("code") or "").strip()
+            message = str(error.get("message") or "gateway request failed").strip()
+            return f"{code}: {message}" if code else message
+        return str(error or "gateway request failed")
+
+    def _gateway_stream_text(self, data: dict[str, Any]) -> str:
+        for key in ("delta", "text", "content"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return ""
+
+    def _extract_latest_assistant_text(self, payload: Any) -> str:
+        candidates: list[Any] = []
+        if isinstance(payload, list):
+            candidates.append(payload)
+        elif isinstance(payload, dict):
+            for key in ("messages", "items", "entries", "history"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    candidates.append(value)
+
+        for items in candidates:
+            for item in reversed(items):
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role") or item.get("type") or "")
+                if role != "assistant":
+                    continue
+                text = self._coerce_chat_text(item.get("content"))
+                if text:
+                    return text
+        return ""
+
+    def _coerce_chat_text(self, value: Any) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str) and text:
+                        parts.append(text)
+            return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
+        if isinstance(value, dict):
+            text = value.get("text")
+            if isinstance(text, str):
+                return text.strip()
+        return ""
+
+    def _contains_trace_footer(self, text: str) -> bool:
+        lowered = text.lower()
+        return "trace" in lowered and (
+            "model:" in lowered or "tokens:" in lowered or "latency:" in lowered or "duration:" in lowered
+        )
 
     def _snapshot_names(self) -> list[str]:
         root = Path(SNAPSHOT_ROOT)
