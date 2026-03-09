@@ -273,6 +273,7 @@ check_openclaw_runtime_mounts() {
 check_openclaw_runtime_config() {
   log_info "Validating OpenClaw provider configuration"
   check_openclaw_config_value "gateway.mode" "local"
+  check_openclaw_config_value "tools.deny" "[\"group:web\"]"
   check_openclaw_config_value "models.providers.ollama.apiKey" "ollama-local" "true"
   check_openclaw_config_value "models.providers.ollama.baseUrl" "${OLLAMA_BASE_URL}"
   check_openclaw_config_value "models.providers.ollama.api" "ollama"

@@ -4,5 +4,10 @@
     "controlUi": {
       "allowedOrigins": []
     }
+  },
+  "tools": {
+    "deny": [
+      "group:web"
+    ]
   }
 }

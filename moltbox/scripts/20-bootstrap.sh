@@ -769,6 +769,7 @@ assert_openclaw_can_reach_ollama() {
 configure_gateway_runtime() {
   log_info "Configuring OpenClaw runtime model/provider state."
   openclaw_exec config set gateway.mode '"local"'
+  openclaw_exec config set tools.deny '["group:web"]'
   openclaw_exec config set models.providers.ollama.apiKey '"ollama-local"'
   openclaw_exec config set models.providers.ollama.baseUrl "\"${OLLAMA_BASE_URL}\""
   openclaw_exec config set models.providers.ollama.api '"ollama"'
@@ -801,6 +802,7 @@ verify_openclaw_config_value() {
 verify_openclaw_runtime_config() {
   log_info "Validating OpenClaw provider configuration"
   verify_openclaw_config_value "gateway.mode" "local"
+  verify_openclaw_config_value "tools.deny" "[\"group:web\"]"
   verify_openclaw_config_value "models.providers.ollama.apiKey" "ollama-local" "true"
   verify_openclaw_config_value "models.providers.ollama.baseUrl" "${OLLAMA_BASE_URL}"
   verify_openclaw_config_value "models.providers.ollama.api" "ollama"

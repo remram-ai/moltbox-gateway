@@ -44,6 +44,11 @@ SNAPSHOT_TOOL = "/usr/local/bin/moltbox-snapshot"
 SNAPSHOT_ROOT = "/mnt/moltbox-backup/snapshots"
 GATEWAY_PROTOCOL_VERSION = 3
 GATEWAY_OPERATOR_SCOPES = ("operator.read", "operator.write")
+TEST_RUNTIME_PERSISTENT_FILES = (
+    "devices/paired.json",
+    "identity/device-auth.json",
+    "identity/device.json",
+)
 SAFE_SCRIPT_MAP = {
     "runtime_reset": "12-runtime-reset.sh",
     "bootstrap": "20-bootstrap.sh",
@@ -1714,6 +1719,7 @@ class MoltboxDebugService:
         if test.runtime_root.exists() and any(test.runtime_root.iterdir()) and not force_recreate:
             raise RuntimeError(f"Test runtime already exists at {test.runtime_root}; rerun with force_recreate=true")
 
+        persisted_files = self._capture_test_runtime_files(test.runtime_root)
         self._safe_remove_path(test.runtime_root)
         self._remove_worktree(test.repo_root)
         checkout_ref = ref or "HEAD"
@@ -1733,6 +1739,7 @@ class MoltboxDebugService:
 
         test.runtime_root.mkdir(parents=True, exist_ok=True)
         self._copy_runtime_subset(prod.runtime_root, test.runtime_root)
+        self._restore_test_runtime_files(test.runtime_root, persisted_files)
         self._prepare_test_runtime_files(test)
         ensure_runtime_dirs(test)
 
@@ -1958,6 +1965,20 @@ class MoltboxDebugService:
             src = source / name
             if src.is_file():
                 shutil.copy2(src, target / name)
+
+    def _capture_test_runtime_files(self, runtime_root: Path) -> dict[str, bytes]:
+        captured: dict[str, bytes] = {}
+        for relative_path in TEST_RUNTIME_PERSISTENT_FILES:
+            path = runtime_root / relative_path
+            if path.is_file():
+                captured[relative_path] = path.read_bytes()
+        return captured
+
+    def _restore_test_runtime_files(self, runtime_root: Path, files: dict[str, bytes]) -> None:
+        for relative_path, content in files.items():
+            path = runtime_root / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
 
     def _prepare_test_runtime_files(self, ctx: RuntimeContext) -> None:
         prod = self._load_runtime("prod")
