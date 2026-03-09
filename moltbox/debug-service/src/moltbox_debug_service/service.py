@@ -768,7 +768,9 @@ class MoltboxDebugService:
         if not snapshot["ok"]:
             return self._fail_publish_flow(flow, "Test publish snapshot failed", snapshot)
 
-        if prod_running:
+        prod_running_after_snapshot = self._stack_running(prod)
+        flow["production"]["was_running_before_test"] = prod_running or prod_running_after_snapshot
+        if prod_running_after_snapshot:
             stopped = self._stop_stack("prod", job_id)
             self._record_publish_step(flow, "stop_prod_for_test", stopped)
             if not stopped["ok"]:
@@ -1013,7 +1015,7 @@ class MoltboxDebugService:
                 return self._fail_publish_flow(flow, "Stopping the test runtime failed during finalization", stopped)
             flow["test_runtime"]["status"] = "stopped"
 
-        if resume_production and flow.get("production", {}).get("was_running_before_test"):
+        if resume_production and flow.get("production", {}).get("stopped_for_test"):
             started = self._start_stack("prod", job_id)
             self._record_publish_step(flow, "resume_prod_after_test", started)
             if not started["ok"]:
@@ -1357,7 +1359,12 @@ class MoltboxDebugService:
         return False
 
     def _stack_running(self, ctx: RuntimeContext) -> bool:
-        ps = self._run_command(ctx, self._compose_args(ctx, "ps", "-q", "openclaw"), timeout=15, cwd=ctx.repo_root)
+        ps = self._run_command(
+            ctx,
+            self._compose_args(ctx, "ps", "--status", "running", "-q", "openclaw"),
+            timeout=15,
+            cwd=ctx.repo_root,
+        )
         return bool(ps["ok"] and ps["stdout"].strip())
 
     def _checkout_test_branch(self, branch: str, job_id: str) -> dict:

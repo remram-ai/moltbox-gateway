@@ -78,8 +78,9 @@ ensure_runtime_token() {
 install_venv() {
   require_cmd python3
   require_cmd sudo
-  python3 -m venv "${VENV_DIR}"
-  "${VENV_PYTHON}" -m pip install --upgrade pip
+  if [[ ! -x "${VENV_PYTHON}" ]]; then
+    python3 -m venv "${VENV_DIR}"
+  fi
   "${VENV_PYTHON}" -m pip install -e "${SERVICE_DIR}"
 }
 
