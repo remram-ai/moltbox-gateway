@@ -11,6 +11,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit, urlunsplit
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -1774,6 +1775,7 @@ class MoltboxDebugService:
                 shutil.copy2(src, target / name)
 
     def _prepare_test_runtime_files(self, ctx: RuntimeContext) -> None:
+        prod = self._load_runtime("prod")
         env_values = parse_env_file(ctx.env_file)
         env_values["COMPOSE_PROJECT_NAME"] = TEST_COMPOSE_PROJECT
         env_values["GATEWAY_PORT"] = str(TEST_GATEWAY_PORT)
@@ -1787,14 +1789,18 @@ class MoltboxDebugService:
         if not isinstance(config, dict):
             config = {}
         gateway = config.setdefault("gateway", {})
+        if not isinstance(gateway, dict):
+            gateway = {}
+            config["gateway"] = gateway
+        gateway["mode"] = "local"
         control_ui = gateway.setdefault("controlUi", {})
+        if not isinstance(control_ui, dict):
+            control_ui = {}
+            gateway["controlUi"] = control_ui
         existing = control_ui.get("allowedOrigins")
         if not isinstance(existing, list):
             existing = []
-        for origin in (f"http://127.0.0.1:{TEST_GATEWAY_PORT}", f"http://localhost:{TEST_GATEWAY_PORT}"):
-            if origin not in existing:
-                existing.append(origin)
-        control_ui["allowedOrigins"] = existing
+        control_ui["allowedOrigins"] = self._build_test_allowed_origins(existing, prod)
         ctx.openclaw_config_file.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
         config_path = ctx.runtime_root / "debug-service" / "config.json"
@@ -1875,6 +1881,40 @@ class MoltboxDebugService:
             if stripped.startswith(f"{SNAPSHOT_ROOT}/"):
                 return stripped
         return None
+
+    def _build_test_allowed_origins(self, existing: list[str], prod: RuntimeContext) -> list[str]:
+        merged: list[str] = []
+        for origin in existing:
+            if isinstance(origin, str) and origin not in merged:
+                merged.append(origin)
+
+        hosts: list[str] = []
+        for origin in prod.allowed_origins:
+            try:
+                parsed = urlsplit(origin)
+            except ValueError:
+                continue
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                continue
+            if parsed.hostname not in hosts:
+                hosts.append(parsed.hostname)
+
+        for host in ("127.0.0.1", "localhost"):
+            if host not in hosts:
+                hosts.append(host)
+
+        for host in hosts:
+            for scheme in ("http", "https"):
+                for include_port in (False, True):
+                    origin = self._origin_for_host(host, scheme, TEST_GATEWAY_PORT if include_port else None)
+                    if origin not in merged:
+                        merged.append(origin)
+
+        return merged
+
+    def _origin_for_host(self, host: str, scheme: str, port: int | None) -> str:
+        netloc = host if port is None else f"{host}:{port}"
+        return urlunsplit((scheme, netloc, "", "", ""))
 
     def _snapshot_names(self) -> list[str]:
         root = Path(SNAPSHOT_ROOT)
