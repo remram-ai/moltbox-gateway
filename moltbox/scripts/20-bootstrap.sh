@@ -336,8 +336,9 @@ ensure_openclaw_runtime_json() {
   local host_ip="$1"
   local host_name="$2"
   local gateway_port="$3"
+  local trusted_proxies_csv="${4:-}"
 
-  python3 - "${RUNTIME_OPENCLAW_CONFIG_FILE}" "${host_ip}" "${host_name}" "${gateway_port}" <<'PY'
+  python3 - "${RUNTIME_OPENCLAW_CONFIG_FILE}" "${host_ip}" "${host_name}" "${gateway_port}" "${trusted_proxies_csv}" <<'PY'
 import json
 import pathlib
 import sys
@@ -346,14 +347,23 @@ config_path = pathlib.Path(sys.argv[1])
 host_ip = sys.argv[2]
 host_name = sys.argv[3]
 gateway_port = sys.argv[4]
+trusted_proxies_csv = sys.argv[5]
 
 required_origins = [
+    "http://127.0.0.1",
+    "https://127.0.0.1",
     f"http://127.0.0.1:{gateway_port}",
     f"https://127.0.0.1:{gateway_port}",
+    "http://localhost",
+    "https://localhost",
     f"http://localhost:{gateway_port}",
     f"https://localhost:{gateway_port}",
+    f"http://{host_ip}",
+    f"https://{host_ip}",
     f"http://{host_ip}:{gateway_port}",
     f"https://{host_ip}:{gateway_port}",
+    f"http://{host_name}",
+    f"https://{host_name}",
     f"http://{host_name}:{gateway_port}",
     f"https://{host_name}:{gateway_port}",
 ]
@@ -388,10 +398,30 @@ for value in [*existing, *required_origins]:
         merged.append(value)
 
 control_ui["allowedOrigins"] = merged
+
+trusted_proxies = gateway.get("trustedProxies")
+if not isinstance(trusted_proxies, list):
+    trusted_proxies = []
+
+merged_trusted_proxies = []
+for value in trusted_proxies:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped not in merged_trusted_proxies:
+            merged_trusted_proxies.append(stripped)
+
+for value in trusted_proxies_csv.split(","):
+    stripped = value.strip()
+    if stripped and stripped not in merged_trusted_proxies:
+        merged_trusted_proxies.append(stripped)
+
+if merged_trusted_proxies:
+    gateway["trustedProxies"] = merged_trusted_proxies
+
 config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 
-  log_info "Ensured runtime config: $(display_path "${RUNTIME_OPENCLAW_CONFIG_FILE}") contains gateway.mode=local and required control UI allowedOrigins"
+  log_info "Ensured runtime config: $(display_path "${RUNTIME_OPENCLAW_CONFIG_FILE}") contains gateway.mode=local, required control UI allowedOrigins, and trusted proxy settings"
 }
 
 require_key() {
@@ -794,7 +824,7 @@ main() {
   host_name="$(detect_host_name)"
   log_info "Detected host LAN IP for control UI origins: ${host_ip}"
   log_info "Detected host name for control UI origins: ${host_name}"
-  ensure_openclaw_runtime_json "${host_ip}" "${host_name}" "${GATEWAY_PORT}"
+  ensure_openclaw_runtime_json "${host_ip}" "${host_name}" "${GATEWAY_PORT}" "${OPENCLAW_TRUSTED_PROXIES:-}"
 
   bring_up_stack
   wait_for_ollama
