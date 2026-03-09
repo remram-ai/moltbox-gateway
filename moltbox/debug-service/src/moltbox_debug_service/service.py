@@ -1381,17 +1381,35 @@ class MoltboxDebugService:
             cwd=test.repo_root,
         )
         direct["operation"] = "publish_branch_checkout_test"
-        if direct["ok"]:
-            return direct
-        fallback = self._run_command(
+        checkout = direct
+        if not checkout["ok"]:
+            fallback = self._run_command(
+                test,
+                ["git", "checkout", "-B", branch, f"origin/{branch}"],
+                job_id=job_id,
+                timeout=self.config.long_timeout_seconds,
+                cwd=test.repo_root,
+            )
+            fallback["operation"] = "publish_branch_checkout_test"
+            checkout = fallback
+        if not checkout["ok"]:
+            return checkout
+
+        fast_forward = self._run_command(
             test,
-            ["git", "checkout", "-B", branch, f"origin/{branch}"],
+            ["git", "pull", "--ff-only", "origin", branch],
             job_id=job_id,
             timeout=self.config.long_timeout_seconds,
             cwd=test.repo_root,
         )
-        fallback["operation"] = "publish_branch_checkout_test"
-        return fallback
+        fast_forward["operation"] = "publish_branch_checkout_test"
+        fast_forward["stdout"] = "\n".join(
+            part for part in [checkout.get("stdout", ""), fast_forward.get("stdout", "")] if part
+        )
+        fast_forward["stderr"] = "\n".join(
+            part for part in [checkout.get("stderr", ""), fast_forward.get("stderr", "")] if part
+        )
+        return fast_forward
 
     def _checkout_repo_detached(self, ctx: RuntimeContext, ref: str | None, job_id: str) -> dict:
         if not ref:
