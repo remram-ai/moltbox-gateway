@@ -252,6 +252,49 @@ bash ./scripts/70-debug-service.sh status
 bash ./scripts/70-debug-service.sh logs
 ```
 
+## 11b. Test And Live Publish Workflow
+
+Use the deployment flow wrapper to publish a git branch into the disposable test runtime, then explicitly approve and publish the same tested commit to production.
+
+Publish a branch into the test runtime:
+
+```bash
+cd ~/git/remram-gateway/moltbox
+bash ./scripts/80-deploy-flow.sh publish --mode test --branch <branch-name>
+```
+
+Finalize the test flow after manual or scripted exercise:
+
+```bash
+bash ./scripts/80-deploy-flow.sh finalize-test <flow-id>
+```
+
+Approve or reject the finalized test flow:
+
+```bash
+bash ./scripts/80-deploy-flow.sh approve <flow-id> --note "Manual UI pass"
+bash ./scripts/80-deploy-flow.sh reject <flow-id> --note "Load test regression"
+```
+
+Publish the latest approved test flow for that branch to production:
+
+```bash
+bash ./scripts/80-deploy-flow.sh publish --mode live --branch <branch-name>
+```
+
+Read or list persisted publish reports:
+
+```bash
+bash ./scripts/80-deploy-flow.sh report <flow-id>
+bash ./scripts/80-deploy-flow.sh list
+```
+
+The deployment flow persists its reports under:
+
+```text
+~/.openclaw/debug-service/flows
+```
+
 ## 12. Manual Compose Context
 
 For direct `docker compose` commands, export the runtime root and run from the compose directory:

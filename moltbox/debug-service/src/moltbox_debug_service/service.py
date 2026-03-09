@@ -20,6 +20,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.routing import Mount
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from .flows import FlowStore
 from .jobs import JobStore
 from .redaction import redact_text
 from .runtime import RuntimeContext, build_runtime, ensure_runtime_dirs, load_service_config, source_ip_allowed
@@ -38,6 +39,8 @@ SAFE_SCRIPT_MAP = {
     "diagnostics": "99-diagnostics.sh",
 }
 MUTATING_OPERATIONS = {
+    "publish_branch",
+    "finalize_test_publish",
     "start_stack",
     "stop_stack",
     "restart_stack",
@@ -83,6 +86,7 @@ class MoltboxDebugService:
         ensure_runtime_dirs(self.runtime)
         self.config = load_service_config(self.runtime)
         self.jobs = JobStore(self.runtime.jobs_dir)
+        self.flows = FlowStore(self.runtime.flows_dir)
         self._busy_lock = threading.Lock()
         self._busy_runtimes: set[str] = set()
         self.mcp = FastMCP(
@@ -167,6 +171,16 @@ class MoltboxDebugService:
             self._enforce_scope(ctx, "snapshot_state")
             return self._snapshot_state()
 
+        @self.mcp.tool(description="List persisted deployment and publish workflow runs recorded under the Moltbox runtime.")
+        async def list_publish_runs(ctx: Context | None = None) -> dict:
+            self._enforce_scope(ctx, "list_publish_runs")
+            return self._list_publish_runs()
+
+        @self.mcp.tool(description="Read the structured report for a persisted publish workflow run.")
+        async def publish_report(flow_id: str, ctx: Context | None = None) -> dict:
+            self._enforce_scope(ctx, "publish_report")
+            return self._publish_report(flow_id)
+
         @self.mcp.tool(description="List allowlisted remote scripts available under moltbox/remote in the selected runtime repo.")
         async def list_remote_scripts(runtime: str = "prod", ctx: Context | None = None) -> dict:
             self._enforce_scope(ctx, "list_remote_scripts")
@@ -233,6 +247,44 @@ class MoltboxDebugService:
         @self.mcp.tool(description="Create a host snapshot with sudo /usr/local/bin/moltbox-snapshot create before mutating Moltbox state.")
         async def snapshot_runtime(ctx: Context | None = None) -> dict:
             return await launch("snapshot_runtime", "prod", lambda job_id: self._snapshot_runtime(job_id), ctx)
+
+        @self.mcp.tool(description="Publish a git branch into the test or live Moltbox workflow. Test mode snapshots prod, pauses prod, deploys into the disposable test runtime, and prepares a report. Live mode deploys the latest approved test run for that branch to production.")
+        async def publish_branch(
+            mode: str,
+            branch: str,
+            validate: bool = True,
+            exercise_script: str | None = None,
+            exercise_args: list[str] | None = None,
+            collect_diagnostics: bool = False,
+            ctx: Context | None = None,
+        ) -> dict:
+            target_runtime = "test" if mode == "test" else "prod"
+            return await launch(
+                "publish_branch",
+                target_runtime,
+                lambda job_id: self._publish_branch(mode, branch, validate, exercise_script, exercise_args or [], collect_diagnostics, job_id),
+                ctx,
+            )
+
+        @self.mcp.tool(description="Stop or destroy the test runtime, optionally collect diagnostics, resume production, and finalize the structured publish report.")
+        async def finalize_test_publish(
+            flow_id: str,
+            resume_production: bool = True,
+            destroy_test_runtime: bool = True,
+            collect_diagnostics: bool = True,
+            ctx: Context | None = None,
+        ) -> dict:
+            return await launch(
+                "finalize_test_publish",
+                "test",
+                lambda job_id: self._finalize_test_publish(flow_id, resume_production, destroy_test_runtime, collect_diagnostics, job_id),
+                ctx,
+            )
+
+        @self.mcp.tool(description="Record explicit operator approval or rejection for a completed test publish run before live deployment.")
+        async def approve_test_publish(flow_id: str, approved: bool, note: str = "", ctx: Context | None = None) -> dict:
+            self._enforce_scope(ctx, "approve_test_publish")
+            return self._approve_test_publish(flow_id, approved, note)
 
         @self.mcp.tool(description="Apply a restricted unified diff patch to the disposable test worktree as an async job.")
         async def patch_repo(patch: str, runtime: str = "test", ctx: Context | None = None) -> dict:
@@ -580,6 +632,456 @@ class MoltboxDebugService:
             },
         }
 
+    def _list_publish_runs(self) -> dict:
+        runs = []
+        for flow in self.flows.list():
+            if flow.get("kind") != "publish":
+                continue
+            runs.append(
+                {
+                    "flow_id": flow["flow_id"],
+                    "status": flow.get("status"),
+                    "target_branch": flow.get("target_branch"),
+                    "tested_head": flow.get("refs", {}).get("test_head"),
+                    "deployed_head": flow.get("refs", {}).get("deployed_head"),
+                    "approved": flow.get("approval", {}).get("approved"),
+                    "updated_at": flow.get("updated_at"),
+                }
+            )
+        return {
+            "ok": True,
+            "operation": "list_publish_runs",
+            "runtime": "prod",
+            "job_id": None,
+            "status": "succeeded",
+            "stdout": "\n".join(f"{item['flow_id']} {item['status']} {item['target_branch']}" for item in runs) + ("\n" if runs else ""),
+            "stderr": "",
+            "artifacts": [],
+            "started_at": None,
+            "finished_at": None,
+            "exit_code": 0,
+            "details": {"runs": runs},
+        }
+
+    def _publish_report(self, flow_id: str) -> dict:
+        flow = self.flows.get(flow_id)
+        details = {
+            "flow_id": flow["flow_id"],
+            "status": flow.get("status"),
+            "target_branch": flow.get("target_branch"),
+            "approval": flow.get("approval", {}),
+            "refs": flow.get("refs", {}),
+            "snapshot": flow.get("snapshot", {}),
+            "production": flow.get("production", {}),
+            "test_runtime": flow.get("test_runtime", {}),
+            "report": flow.get("report", {}),
+            "steps": flow.get("steps", []),
+            "report_path": str(self.runtime.flows_dir / f"{flow_id}.json"),
+        }
+        return {
+            "ok": True,
+            "operation": "publish_report",
+            "runtime": "prod",
+            "job_id": None,
+            "status": "succeeded",
+            "stdout": json.dumps(details, indent=2) + "\n",
+            "stderr": "",
+            "artifacts": list(flow.get("report", {}).get("artifacts", [])),
+            "started_at": flow.get("created_at"),
+            "finished_at": flow.get("updated_at"),
+            "exit_code": 0,
+            "details": details,
+        }
+
+    def _publish_branch(
+        self,
+        mode: str,
+        branch: str,
+        validate: bool,
+        exercise_script: str | None,
+        exercise_args: list[str],
+        collect_diagnostics: bool,
+        job_id: str,
+    ) -> dict:
+        if mode not in {"test", "live"}:
+            raise RuntimeError(f"Unsupported publish mode: {mode}")
+        self._validate_git_ref(branch)
+        if mode == "test":
+            return self._publish_branch_to_test(branch, validate, exercise_script, exercise_args, collect_diagnostics, job_id)
+        return self._publish_branch_to_live(branch, validate, collect_diagnostics, job_id)
+
+    def _publish_branch_to_test(
+        self,
+        branch: str,
+        validate: bool,
+        exercise_script: str | None,
+        exercise_args: list[str],
+        collect_diagnostics: bool,
+        job_id: str,
+    ) -> dict:
+        prod = self._load_runtime("prod")
+        test = self._load_runtime("test")
+        prod_running = self._stack_running(prod)
+        prod_refs = self._git_refs(prod)
+        flow = self.flows.create(
+            {
+                "kind": "publish",
+                "status": "preparing_test",
+                "target_branch": branch,
+                "approval": {"required": True, "approved": None, "approved_at": None, "note": ""},
+                "snapshot": {"before_test": None, "before_live": None},
+                "refs": {
+                    "prod_head_before_test": prod_refs["head"],
+                    "prod_branch_before_test": prod_refs["branch"],
+                    "test_head": None,
+                    "test_branch": None,
+                    "deployed_head": None,
+                },
+                "production": {
+                    "was_running_before_test": prod_running,
+                    "stopped_for_test": False,
+                    "resumed_after_test": False,
+                    "rollback_head": prod_refs["head"],
+                    "rollback_branch": prod_refs["branch"],
+                },
+                "test_runtime": {
+                    "runtime_root": str(test.runtime_root),
+                    "repo_root": str(test.repo_root),
+                    "status": "not_created",
+                },
+                "report": {
+                    "summary": "",
+                    "artifacts": [],
+                    "manual_testing_required": True,
+                    "manual_testing_complete": False,
+                    "live_deploy": {"status": "not_started"},
+                },
+                "steps": [],
+            }
+        )
+        self.jobs.append_log(job_id, f"publish_flow_id={flow['flow_id']}\n")
+
+        snapshot = self._snapshot_runtime(job_id)
+        flow["snapshot"]["before_test"] = snapshot.get("details", {}).get("snapshot_path")
+        self._record_publish_step(flow, "snapshot_before_test", snapshot)
+        if not snapshot["ok"]:
+            return self._fail_publish_flow(flow, "Test publish snapshot failed", snapshot)
+
+        if prod_running:
+            stopped = self._stop_stack("prod", job_id)
+            self._record_publish_step(flow, "stop_prod_for_test", stopped)
+            if not stopped["ok"]:
+                return self._fail_publish_flow(flow, "Stopping production before test publish failed", stopped)
+            flow["production"]["stopped_for_test"] = True
+
+        created = self._create_test_runtime(True, prod_refs["head"], job_id)
+        self._record_publish_step(flow, "create_test_runtime", created)
+        if not created["ok"]:
+            return self._fail_publish_flow(flow, "Creating the disposable test runtime failed", created)
+        flow["test_runtime"]["status"] = "created"
+
+        fetched = self._run_command(
+            test,
+            ["git", "fetch", "--prune", "origin"],
+            job_id=job_id,
+            timeout=self.config.long_timeout_seconds,
+            cwd=test.repo_root,
+        )
+        fetched["operation"] = "publish_branch_fetch_test"
+        self._record_publish_step(flow, "fetch_test_branch", fetched)
+        if not fetched["ok"]:
+            return self._fail_publish_flow(flow, "Fetching the target test branch failed", fetched)
+
+        checked_out = self._checkout_test_branch(branch, job_id)
+        self._record_publish_step(flow, "checkout_test_branch", checked_out)
+        if not checked_out["ok"]:
+            return self._fail_publish_flow(flow, "Checking out the target test branch failed", checked_out)
+
+        test_refs = self._git_refs(test)
+        flow["refs"]["test_head"] = test_refs["head"]
+        flow["refs"]["test_branch"] = test_refs["branch"]
+        self.flows.write(flow["flow_id"], flow)
+
+        bootstrapped = self._run_script("test", "20-bootstrap.sh", job_id, "publish_branch_bootstrap_test")
+        self._record_publish_step(flow, "bootstrap_test_runtime", bootstrapped)
+        if not bootstrapped["ok"]:
+            return self._fail_publish_flow(flow, "Bootstrapping the test runtime failed", bootstrapped)
+
+        validated = None
+        if validate:
+            validated = self._run_script("test", "30-validate.sh", job_id, "publish_branch_validate_test")
+            self._record_publish_step(flow, "validate_test_runtime", validated)
+            if not validated["ok"]:
+                return self._fail_publish_flow(flow, "Validation failed for the test runtime", validated)
+
+        exercised = None
+        if exercise_script:
+            exercised = self._run_remote_script("test", exercise_script, exercise_args, job_id)
+            self._record_publish_step(flow, "exercise_test_runtime", exercised)
+            if not exercised["ok"]:
+                return self._fail_publish_flow(flow, "The configured exercise script failed in the test runtime", exercised)
+
+        diagnostics = None
+        if collect_diagnostics:
+            diagnostics = self._collect_diagnostics("test", job_id)
+            self._record_publish_step(flow, "collect_test_diagnostics", diagnostics)
+
+        test_status = self._runtime_status("test")
+        self._record_publish_step(flow, "test_runtime_status", test_status)
+        if not test_status["ok"]:
+            return self._fail_publish_flow(flow, "The test runtime did not reach a healthy state", test_status)
+
+        flow["status"] = "test_active"
+        flow["test_runtime"]["status"] = "active"
+        flow["report"]["summary"] = (
+            f"Branch '{branch}' published into the disposable test runtime. "
+            f"Test head {flow['refs']['test_head']} is active and ready for manual or scripted exercise."
+        )
+        flow["report"]["manual_testing_complete"] = False
+        self.flows.write(flow["flow_id"], flow)
+        artifacts = list(flow["report"]["artifacts"])
+        stdout_lines = [
+            f"flow_id={flow['flow_id']}",
+            f"target_branch={branch}",
+            f"test_head={flow['refs']['test_head']}",
+            f"report_path={self.runtime.flows_dir / (flow['flow_id'] + '.json')}",
+        ]
+        return {
+            "ok": True,
+            "operation": "publish_branch",
+            "runtime": "test",
+            "stdout": "\n".join(stdout_lines) + "\n",
+            "stderr": "",
+            "artifacts": artifacts,
+            "exit_code": 0,
+            "details": {
+                "mode": "test",
+                "flow_id": flow["flow_id"],
+                "target_branch": branch,
+                "report_path": str(self.runtime.flows_dir / f"{flow['flow_id']}.json"),
+                "test_head": flow["refs"]["test_head"],
+                "test_branch": flow["refs"]["test_branch"],
+                "snapshot_path": flow["snapshot"]["before_test"],
+            },
+        }
+
+    def _publish_branch_to_live(self, branch: str, validate: bool, collect_diagnostics: bool, job_id: str) -> dict:
+        flow = self._latest_approved_publish_flow(branch)
+        if flow is None:
+            raise RuntimeError(f"No approved test publish exists for branch '{branch}'")
+
+        prod = self._load_runtime("prod")
+        prod_refs = self._git_refs(prod)
+        dirty = self._git_dirty(prod)
+        if dirty:
+            raise RuntimeError("Production repo has uncommitted changes; refuse live publish until it is clean")
+
+        flow["status"] = "deploying_live"
+        flow["refs"]["prod_head_before_live"] = prod_refs["head"]
+        flow["refs"]["prod_branch_before_live"] = prod_refs["branch"]
+        flow["production"]["rollback_head"] = prod_refs["head"]
+        flow["production"]["rollback_branch"] = prod_refs["branch"]
+        self.flows.write(flow["flow_id"], flow)
+        self.jobs.append_log(job_id, f"publish_flow_id={flow['flow_id']}\n")
+
+        snapshot = self._snapshot_runtime(job_id)
+        flow["snapshot"]["before_live"] = snapshot.get("details", {}).get("snapshot_path")
+        self._record_publish_step(flow, "snapshot_before_live", snapshot)
+        if not snapshot["ok"]:
+            return self._fail_publish_flow(flow, "Live publish snapshot failed", snapshot)
+
+        if self._stack_running(prod):
+            stopped = self._stop_stack("prod", job_id)
+            self._record_publish_step(flow, "stop_prod_for_live", stopped)
+            if not stopped["ok"]:
+                return self._fail_publish_flow(flow, "Stopping production before live publish failed", stopped)
+
+        fetched = self._run_command(
+            prod,
+            ["git", "fetch", "--prune", "origin"],
+            job_id=job_id,
+            timeout=self.config.long_timeout_seconds,
+            cwd=prod.repo_root,
+        )
+        fetched["operation"] = "publish_branch_fetch_prod"
+        self._record_publish_step(flow, "fetch_prod_repo", fetched)
+        if not fetched["ok"]:
+            return self._fail_publish_flow(flow, "Fetching production git refs failed", fetched)
+
+        tested_head = flow.get("refs", {}).get("test_head")
+        deployed = self._checkout_repo_detached(prod, tested_head, job_id)
+        self._record_publish_step(flow, "checkout_live_head", deployed)
+        if not deployed["ok"]:
+            return self._fail_publish_flow(flow, "Checking out the approved tested commit for live publish failed", deployed)
+
+        bootstrapped = self._run_script("prod", "20-bootstrap.sh", job_id, "publish_branch_bootstrap_live")
+        self._record_publish_step(flow, "bootstrap_live_runtime", bootstrapped)
+        if not bootstrapped["ok"]:
+            return self._rollback_live_publish(flow, job_id, "Bootstrapping production failed after switching to the approved test commit", bootstrapped)
+
+        validated = None
+        if validate:
+            validated = self._run_script("prod", "30-validate.sh", job_id, "publish_branch_validate_live")
+            self._record_publish_step(flow, "validate_live_runtime", validated)
+            if not validated["ok"]:
+                return self._rollback_live_publish(flow, job_id, "Validation failed after live publish", validated)
+
+        diagnostics = None
+        if collect_diagnostics:
+            diagnostics = self._collect_diagnostics("prod", job_id)
+            self._record_publish_step(flow, "collect_live_diagnostics", diagnostics)
+
+        prod_status = self._runtime_status("prod")
+        self._record_publish_step(flow, "live_runtime_status", prod_status)
+        if not prod_status["ok"]:
+            return self._rollback_live_publish(flow, job_id, "Production runtime health check failed after live publish", prod_status)
+
+        flow["status"] = "live_deployed"
+        flow["refs"]["deployed_head"] = tested_head
+        flow["report"]["live_deploy"] = {
+            "status": "deployed",
+            "deployed_head": tested_head,
+            "deployed_at": datetime.now(tz=UTC).isoformat(),
+            "snapshot_path": flow["snapshot"]["before_live"],
+        }
+        flow["report"]["summary"] = (
+            f"Branch '{branch}' live publish succeeded. "
+            f"Production is now running tested commit {tested_head}."
+        )
+        self.flows.write(flow["flow_id"], flow)
+        return {
+            "ok": True,
+            "operation": "publish_branch",
+            "runtime": "prod",
+            "stdout": (
+                f"flow_id={flow['flow_id']}\n"
+                f"target_branch={branch}\n"
+                f"deployed_head={tested_head}\n"
+                f"report_path={self.runtime.flows_dir / (flow['flow_id'] + '.json')}\n"
+            ),
+            "stderr": "",
+            "artifacts": list(flow["report"]["artifacts"]),
+            "exit_code": 0,
+            "details": {
+                "mode": "live",
+                "flow_id": flow["flow_id"],
+                "target_branch": branch,
+                "deployed_head": tested_head,
+                "report_path": str(self.runtime.flows_dir / f"{flow['flow_id']}.json"),
+                "snapshot_path": flow["snapshot"]["before_live"],
+            },
+        }
+
+    def _finalize_test_publish(
+        self,
+        flow_id: str,
+        resume_production: bool,
+        destroy_test_runtime: bool,
+        collect_diagnostics: bool,
+        job_id: str,
+    ) -> dict:
+        flow = self.flows.get(flow_id)
+        if flow.get("kind") != "publish":
+            raise RuntimeError(f"Flow '{flow_id}' is not a publish workflow")
+        if flow.get("status") not in {"test_active", "awaiting_approval", "approved", "rejected"}:
+            raise RuntimeError(f"Flow '{flow_id}' is not in a finalizable state: {flow.get('status')}")
+
+        test_status = self._runtime_status("test")
+        self._record_publish_step(flow, "final_test_runtime_status", test_status)
+
+        if collect_diagnostics:
+            diagnostics = self._collect_diagnostics("test", job_id)
+            self._record_publish_step(flow, "final_test_diagnostics", diagnostics)
+
+        if destroy_test_runtime:
+            destroyed = self._destroy_test_runtime(True, job_id)
+            self._record_publish_step(flow, "destroy_test_runtime", destroyed)
+            if not destroyed["ok"]:
+                return self._fail_publish_flow(flow, "Destroying the test runtime failed during finalization", destroyed)
+            flow["test_runtime"]["status"] = "destroyed"
+        else:
+            stopped = self._stop_stack("test", job_id)
+            self._record_publish_step(flow, "stop_test_runtime", stopped)
+            if not stopped["ok"]:
+                return self._fail_publish_flow(flow, "Stopping the test runtime failed during finalization", stopped)
+            flow["test_runtime"]["status"] = "stopped"
+
+        if resume_production and flow.get("production", {}).get("was_running_before_test"):
+            started = self._start_stack("prod", job_id)
+            self._record_publish_step(flow, "resume_prod_after_test", started)
+            if not started["ok"]:
+                return self._fail_publish_flow(flow, "Resuming production after test finalization failed", started)
+            flow["production"]["resumed_after_test"] = True
+
+        flow["status"] = "awaiting_approval"
+        flow["report"]["manual_testing_complete"] = True
+        flow["report"]["summary"] = (
+            f"Test publish for branch '{flow.get('target_branch')}' is complete. "
+            "Review the report, then record approval before publishing live."
+        )
+        self.flows.write(flow["flow_id"], flow)
+        return {
+            "ok": True,
+            "operation": "finalize_test_publish",
+            "runtime": "test",
+            "stdout": (
+                f"flow_id={flow['flow_id']}\n"
+                f"status={flow['status']}\n"
+                f"report_path={self.runtime.flows_dir / (flow['flow_id'] + '.json')}\n"
+            ),
+            "stderr": "",
+            "artifacts": list(flow["report"]["artifacts"]),
+            "exit_code": 0,
+            "details": {
+                "flow_id": flow["flow_id"],
+                "status": flow["status"],
+                "report_path": str(self.runtime.flows_dir / f"{flow['flow_id']}.json"),
+                "approval_required": True,
+            },
+        }
+
+    def _approve_test_publish(self, flow_id: str, approved: bool, note: str) -> dict:
+        flow = self.flows.get(flow_id)
+        if flow.get("kind") != "publish":
+            raise RuntimeError(f"Flow '{flow_id}' is not a publish workflow")
+        if flow.get("status") not in {"awaiting_approval", "approved", "rejected"}:
+            raise RuntimeError(f"Flow '{flow_id}' is not ready for approval: {flow.get('status')}")
+        flow["approval"] = {
+            **flow.get("approval", {}),
+            "approved": approved,
+            "approved_at": datetime.now(tz=UTC).isoformat(),
+            "note": note,
+        }
+        flow["status"] = "approved" if approved else "rejected"
+        flow["report"]["summary"] = (
+            f"Test publish for branch '{flow.get('target_branch')}' was "
+            f"{'approved' if approved else 'rejected'} for live deployment."
+        )
+        self.flows.write(flow["flow_id"], flow)
+        return {
+            "ok": True,
+            "operation": "approve_test_publish",
+            "runtime": "prod",
+            "job_id": None,
+            "status": "succeeded",
+            "stdout": (
+                f"flow_id={flow['flow_id']}\n"
+                f"approved={'true' if approved else 'false'}\n"
+            ),
+            "stderr": "",
+            "artifacts": list(flow["report"]["artifacts"]),
+            "started_at": None,
+            "finished_at": None,
+            "exit_code": 0,
+            "details": {
+                "flow_id": flow["flow_id"],
+                "approved": approved,
+                "note": note,
+                "status": flow["status"],
+                "report_path": str(self.runtime.flows_dir / f"{flow['flow_id']}.json"),
+            },
+        }
+
     def _runtime_config_summary(self, runtime: str) -> dict:
         ctx = self._load_runtime(runtime)
         cfg = load_service_config(ctx)
@@ -727,6 +1229,88 @@ class MoltboxDebugService:
             "details": {"repo_root": str(ctx.repo_root), "remote_script_dir": str(ctx.remote_script_dir), "scripts": scripts},
         }
 
+    def _record_publish_step(self, flow: dict, name: str, result: dict) -> None:
+        step = {
+            "name": name,
+            "ok": result.get("ok"),
+            "status": result.get("status"),
+            "exit_code": result.get("exit_code"),
+            "stdout_tail": "\n".join(result.get("stdout", "").splitlines()[-20:]),
+            "stderr_tail": "\n".join(result.get("stderr", "").splitlines()[-20:]),
+            "artifacts": list(result.get("artifacts", [])),
+        }
+        if "details" in result:
+            step["details"] = result["details"]
+        flow.setdefault("steps", []).append(step)
+        artifacts = flow.setdefault("report", {}).setdefault("artifacts", [])
+        for item in result.get("artifacts", []):
+            if item not in artifacts:
+                artifacts.append(item)
+        self.flows.write(flow["flow_id"], flow)
+
+    def _fail_publish_flow(self, flow: dict, message: str, result: dict) -> dict:
+        flow["status"] = "failed"
+        flow.setdefault("report", {})["summary"] = message
+        self.flows.write(flow["flow_id"], flow)
+        return {
+            **result,
+            "operation": result.get("operation") or "publish_branch",
+            "details": {
+                **result.get("details", {}),
+                "flow_id": flow["flow_id"],
+                "report_path": str(self.runtime.flows_dir / f"{flow['flow_id']}.json"),
+                "summary": message,
+            },
+        }
+
+    def _rollback_live_publish(self, flow: dict, job_id: str, message: str, failed_result: dict) -> dict:
+        prod = self._load_runtime("prod")
+        rollback = self._checkout_repo_detached(prod, flow.get("production", {}).get("rollback_head"), job_id)
+        self._record_publish_step(flow, "rollback_prod_head", rollback)
+        if rollback["ok"]:
+            rebootstrap = self._run_script("prod", "20-bootstrap.sh", job_id, "publish_branch_bootstrap_rollback")
+            self._record_publish_step(flow, "rollback_bootstrap_prod", rebootstrap)
+            if rebootstrap["ok"]:
+                revalidate = self._run_script("prod", "30-validate.sh", job_id, "publish_branch_validate_rollback")
+                self._record_publish_step(flow, "rollback_validate_prod", revalidate)
+                if revalidate["ok"]:
+                    flow["status"] = "live_failed_rolled_back"
+                    flow.setdefault("report", {})["summary"] = f"{message}. Production was rolled back to the previous deployed commit."
+                    self.flows.write(flow["flow_id"], flow)
+                    return {
+                        **failed_result,
+                        "details": {
+                            **failed_result.get("details", {}),
+                            "flow_id": flow["flow_id"],
+                            "report_path": str(self.runtime.flows_dir / f"{flow['flow_id']}.json"),
+                            "summary": flow["report"]["summary"],
+                            "rollback_head": flow.get("production", {}).get("rollback_head"),
+                        },
+                    }
+        flow["status"] = "live_failed"
+        flow.setdefault("report", {})["summary"] = f"{message}. Automatic rollback did not complete cleanly."
+        self.flows.write(flow["flow_id"], flow)
+        return {
+            **failed_result,
+            "details": {
+                **failed_result.get("details", {}),
+                "flow_id": flow["flow_id"],
+                "report_path": str(self.runtime.flows_dir / f"{flow['flow_id']}.json"),
+                "summary": flow["report"]["summary"],
+                "rollback_head": flow.get("production", {}).get("rollback_head"),
+            },
+        }
+
+    def _latest_approved_publish_flow(self, branch: str) -> dict | None:
+        for flow in self.flows.list():
+            if flow.get("kind") != "publish":
+                continue
+            if flow.get("target_branch") != branch:
+                continue
+            if flow.get("approval", {}).get("approved") is True:
+                return flow
+        return None
+
     def _logs(self, runtime: str, service: str, tail_lines: int, since_seconds: int | None = None) -> dict:
         ctx = self._load_runtime(runtime)
         if service not in {"openclaw", "ollama", "opensearch"}:
@@ -738,6 +1322,56 @@ class MoltboxDebugService:
         argv.append(service)
         result = self._run_command(ctx, argv)
         result.update({"operation": f"logs_{service}" if since_seconds is None else "tail_logs", "runtime": runtime})
+        return result
+
+    def _git_refs(self, ctx: RuntimeContext) -> dict[str, str]:
+        branch = self._run_command(ctx, ["git", "branch", "--show-current"], cwd=ctx.repo_root)
+        head = self._run_command(ctx, ["git", "rev-parse", "HEAD"], cwd=ctx.repo_root)
+        if not branch["ok"] or not head["ok"]:
+            raise RuntimeError(f"Failed to inspect git refs for runtime '{ctx.name}'")
+        return {"branch": branch["stdout"].strip(), "head": head["stdout"].strip()}
+
+    def _git_dirty(self, ctx: RuntimeContext) -> bool:
+        status = self._run_command(ctx, ["git", "status", "--porcelain"], cwd=ctx.repo_root)
+        return bool(status["stdout"].strip())
+
+    def _stack_running(self, ctx: RuntimeContext) -> bool:
+        ps = self._run_command(ctx, self._compose_args(ctx, "ps", "-q", "openclaw"), timeout=15, cwd=ctx.repo_root)
+        return bool(ps["ok"] and ps["stdout"].strip())
+
+    def _checkout_test_branch(self, branch: str, job_id: str) -> dict:
+        test = self._load_runtime("test")
+        direct = self._run_command(
+            test,
+            ["git", "checkout", branch],
+            job_id=job_id,
+            timeout=self.config.long_timeout_seconds,
+            cwd=test.repo_root,
+        )
+        direct["operation"] = "publish_branch_checkout_test"
+        if direct["ok"]:
+            return direct
+        fallback = self._run_command(
+            test,
+            ["git", "checkout", "-B", branch, f"origin/{branch}"],
+            job_id=job_id,
+            timeout=self.config.long_timeout_seconds,
+            cwd=test.repo_root,
+        )
+        fallback["operation"] = "publish_branch_checkout_test"
+        return fallback
+
+    def _checkout_repo_detached(self, ctx: RuntimeContext, ref: str | None, job_id: str) -> dict:
+        if not ref:
+            raise RuntimeError("Missing git ref for detached checkout")
+        result = self._run_command(
+            ctx,
+            ["git", "checkout", "--detach", ref],
+            job_id=job_id,
+            timeout=self.config.long_timeout_seconds,
+            cwd=ctx.repo_root,
+        )
+        result["operation"] = "publish_branch_checkout_detached"
         return result
 
     def _openclaw_doctor(self, runtime: str, job_id: str) -> dict:

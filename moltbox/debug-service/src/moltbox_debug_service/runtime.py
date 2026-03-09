@@ -31,6 +31,7 @@ class RuntimeContext:
     debug_config_file: Path
     debug_clients_file: Path
     jobs_dir: Path
+    flows_dir: Path
     artifacts_dir: Path
     compose_file: Path
     env_values: dict[str, str]
@@ -163,6 +164,7 @@ def build_runtime(name: str) -> RuntimeContext:
         debug_config_file=debug_root / "config.json",
         debug_clients_file=debug_root / "clients.json",
         jobs_dir=debug_root / "jobs",
+        flows_dir=debug_root / "flows",
         artifacts_dir=debug_root / "artifacts",
         compose_file=repo_root / "moltbox" / "config" / "docker-compose.yml",
         env_values=parse_env_file(env_file),
@@ -214,6 +216,7 @@ def load_service_config(runtime: RuntimeContext) -> ServiceConfig:
 def ensure_runtime_dirs(runtime: RuntimeContext) -> None:
     runtime.debug_root.mkdir(parents=True, exist_ok=True)
     runtime.jobs_dir.mkdir(parents=True, exist_ok=True)
+    runtime.flows_dir.mkdir(parents=True, exist_ok=True)
     runtime.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
 

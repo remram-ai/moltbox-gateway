@@ -203,7 +203,7 @@ assert_internal_only_ports() {
   local ps_output
   ps_output="$(compose ps)"
 
-  if grep -Eq '->11434/tcp|->9200/tcp' <<<"${ps_output}"; then
+  if grep -Eq -- '->11434/tcp|->9200/tcp' <<<"${ps_output}"; then
     log_error "Detected forbidden published port mapping for Ollama or OpenSearch."
     echo "${ps_output}" >&2
     return 1
