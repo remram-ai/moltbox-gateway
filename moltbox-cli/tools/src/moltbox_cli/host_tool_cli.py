@@ -192,11 +192,35 @@ def _compose_lifecycle(operation: str, payload: dict[str, Any], compose_args: li
     )
 
 
+def _docker_target_lifecycle(operation: str, payload: dict[str, Any], docker_verb: str) -> dict[str, Any]:
+    if not _docker_available():
+        return _result(operation, False, errors=["docker_not_available"])
+    container_names = [str(item) for item in payload.get("container_names", [])]
+    if not container_names:
+        return _result(operation, False, errors=["target_has_no_containers"])
+    command = ["docker", docker_verb, *container_names]
+    completed = _run_command(command)
+    ok = completed.returncode == 0
+    return _result(
+        operation,
+        ok,
+        details={
+            "docker_command": command,
+            "docker_stdout": completed.stdout.strip(),
+            "docker_stderr": completed.stderr.strip(),
+        },
+        errors=[] if ok else [completed.stderr.strip() or f"{operation}_failed"],
+    )
+
+
 def _deploy_target(payload: dict[str, Any]) -> dict[str, Any]:
     if not _docker_available():
         return _result("deploy_target", False, errors=["docker_not_available"])
     render_dir = Path(str(payload["render_dir"]))
-    command = _compose_command(render_dir, str(payload["compose_project"]), ["up", "-d", "--remove-orphans"])
+    compose_args = ["up", "-d"]
+    if bool(payload.get("remove_orphans", True)):
+        compose_args.append("--remove-orphans")
+    command = _compose_command(render_dir, str(payload["compose_project"]), compose_args)
     completed = _run_command(command)
     ok = completed.returncode == 0
     containers = _container_details([str(item) for item in payload.get("container_names", [])])
@@ -215,6 +239,18 @@ def _deploy_target(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _start_runtime(payload: dict[str, Any]) -> dict[str, Any]:
     return _compose_lifecycle("start_runtime", payload, ["start"])
+
+
+def _start_target(payload: dict[str, Any]) -> dict[str, Any]:
+    return _docker_target_lifecycle("start_target", payload, "start")
+
+
+def _stop_target(payload: dict[str, Any]) -> dict[str, Any]:
+    return _docker_target_lifecycle("stop_target", payload, "stop")
+
+
+def _restart_target(payload: dict[str, Any]) -> dict[str, Any]:
+    return _docker_target_lifecycle("restart_target", payload, "restart")
 
 
 def _stop_runtime(payload: dict[str, Any]) -> dict[str, Any]:
@@ -320,6 +356,9 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "inspect_target": _inspect_target,
     "tail_target_logs": _tail_target_logs,
     "deploy_target": _deploy_target,
+    "start_target": _start_target,
+    "stop_target": _stop_target,
+    "restart_target": _restart_target,
     "start_runtime": _start_runtime,
     "stop_runtime": _stop_runtime,
     "restart_runtime": _restart_runtime,

@@ -79,18 +79,20 @@ def _runtime_target(config: AppConfig, target_id: str, display_name: str, hostna
 def _shared_service_target(config: AppConfig, target_id: str, display_name: str) -> TargetRecord:
     now = _iso_now()
     shared_root = config.layout.shared_dir / target_id
+    container_name = f"moltbox-{target_id}"
     return TargetRecord(
         id=target_id,
         target_class="shared_service",
         display_name=display_name,
         asset_path=f"shared-services/{target_id}",
-        compose_project=f"remram-{target_id}",
-        container_names=[target_id],
+        compose_project="moltbox",
+        container_names=[container_name],
         snapshot_scope="target",
         validator_key="container_baseline",
         log_source="docker_logs",
+        runtime_root=str((Path.home() / ".openclaw").expanduser()),
         service_name=target_id,
-        container_name=target_id,
+        container_name=container_name,
         created_at=now,
         updated_at=now,
         metadata={

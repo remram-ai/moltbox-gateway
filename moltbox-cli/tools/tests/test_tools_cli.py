@@ -113,7 +113,8 @@ def test_tools_inspect_reconciles_legacy_registry(tmp_path: Path) -> None:
     assert stored_tools["id"] == "tools"
     assert stored_tools["asset_path"] == "tools"
     assert "control-plane" in stored_tools["metadata"]["aliases"]
-    assert stored_ollama["compose_project"] == "remram-ollama"
+    assert stored_ollama["compose_project"] == "moltbox"
+    assert stored_ollama["container_names"] == ["moltbox-ollama"]
     assert not (target_dir / "control-plane.json").exists()
 
 

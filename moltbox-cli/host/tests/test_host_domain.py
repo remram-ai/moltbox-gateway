@@ -7,8 +7,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "src"))
 
 from moltbox_cli.config import resolve_config
+from moltbox_cli.deployment_service import host_lifecycle
 from moltbox_cli.deployment_service import render_assets
 from moltbox_cli.jsonio import read_json_file
+from moltbox_cli.registry import get_target
 
 
 class Args:
@@ -35,3 +37,49 @@ def test_host_render_uses_moltbox_container_assets(tmp_path: Path, monkeypatch) 
     source_paths = [path.replace("/", "\\") for path in manifest["source_asset_paths"]]
     assert source_paths
     assert all("moltbox\\containers\\shared-services\\ollama" in path for path in source_paths)
+    compose_text = (Path(rendered["output_dir"]) / "compose.yml").read_text(encoding="utf-8")
+    assert "container_name: \"moltbox-ollama\"" in compose_text
+    assert "gpus: all" in compose_text
+    assert "ports:" not in compose_text
+    target = get_target(config, "ollama")
+    assert target.compose_project == "moltbox"
+    assert target.container_names == ["moltbox-ollama"]
+    assert Path(target.runtime_root) == Path.home() / ".openclaw"
+
+
+def test_opensearch_render_uses_repo_config_and_legacy_service_identity(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    config = resolve_config(Args())
+    payload = render_assets(config, "opensearch")
+    assert payload["ok"] is True
+    rendered = payload["render"]
+    compose_text = (Path(rendered["output_dir"]) / "compose.yml").read_text(encoding="utf-8")
+    assert "container_name: \"moltbox-opensearch\"" in compose_text
+    assert "./config/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro" in compose_text
+    assert "ports:" not in compose_text
+    assert rendered["config_path"].replace("/", "\\").endswith("moltbox\\config\\opensearch.yml")
+    assert Path(rendered["rendered_config_path"]).name == "opensearch.yml"
+    rendered_config = Path(rendered["rendered_config_path"]).read_text(encoding="utf-8")
+    assert "cluster.name: remram-moltbox" in rendered_config
+    target = get_target(config, "opensearch")
+    assert target.compose_project == "moltbox"
+    assert target.container_names == ["moltbox-opensearch"]
+
+
+def test_host_lifecycle_reports_canonical_cli_command(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    config = resolve_config(Args())
+
+    def fake_run_primitive(config_arg, name: str, payload: dict[str, object]) -> dict[str, object]:
+        if name == "restart_target":
+            return {"ok": True, "stdout": "", "stderr": "", "details": {}}
+        if name == "tail_target_logs":
+            return {"ok": True, "details": {"log_tail": "running"}}
+        raise AssertionError(name)
+
+    monkeypatch.setattr("moltbox_cli.deployment_service.run_primitive", fake_run_primitive)
+    payload = host_lifecycle(config, "ollama", "restart")
+    assert payload["command"] == "moltbox host ollama restart"
+    assert payload["ok"] is True

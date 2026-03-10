@@ -9,7 +9,7 @@ from .target_resolution import HOST_TARGETS, RUNTIME_TARGETS, resolve_target_ide
 
 
 RUNTIME_VERBS = {"deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart"}
-HOST_VERBS = {"deploy", "rollback", "status", "inspect", "logs"}
+HOST_VERBS = {"deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart"}
 TOOLS_VERBS = {"version", "health", "serve", "status", "inspect", "update", "rollback", "logs"}
 
 
@@ -37,6 +37,10 @@ def _dispatch_target_action(config, target: str, verb: str) -> None:  # noqa: AN
         from .commands.status import handle_status
 
         _emit_and_exit(handle_status(config, target))
+    if verb in {"start", "stop", "restart"}:
+        from .deployment_service import host_lifecycle
+
+        _emit_and_exit(host_lifecycle(config, target, verb))
     if verb in {"deploy", "update"}:
         from .commands.deploy import handle_deploy
 

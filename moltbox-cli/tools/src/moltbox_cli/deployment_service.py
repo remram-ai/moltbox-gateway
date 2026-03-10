@@ -161,6 +161,7 @@ def deploy_target(config: AppConfig, target: str) -> dict[str, Any]:
             "render_dir": render_dir,
             "compose_project": record.compose_project,
             "container_names": record.container_names,
+            "remove_orphans": record.target_class != "shared_service",
         },
     )
     validate_result = run_primitive(
@@ -335,6 +336,37 @@ def runtime_lifecycle(config: AppConfig, env: str, action: str) -> dict[str, Any
             "target": record.id,
             "render_dir": str(render_details.get("output_dir") or deployment_rendered_dir(config, record.id, record.profile)),
             "compose_project": record.compose_project,
+            "container_names": record.container_names,
+        },
+    )
+    return {
+        "ok": bool(result.get("ok")),
+        "status": "success" if result.get("ok") else "failure",
+        "command": canonical_cli_command(record.id, action),
+        "target": record.id,
+        "exit_code": int(result.get("exit_code", 0 if result.get("ok") else 1)),
+        "stdout": str(result.get("stdout") or ""),
+        "stderr": str(result.get("stderr") or ""),
+        "timestamp": utc_now_iso(),
+        "duration_ms": 0,
+        "log_tail": _log_tail(config, record),
+    }
+
+
+def host_lifecycle(config: AppConfig, target: str, action: str) -> dict[str, Any]:
+    record = get_target(config, target)
+    if record.target_class != "shared_service":
+        raise ValidationError(
+            f"unsupported host lifecycle target '{record.id}'",
+            "use a shared host service target and rerun the command",
+            target=record.id,
+        )
+    primitive_name = {"start": "start_target", "stop": "stop_target", "restart": "restart_target"}[action]
+    result = run_primitive(
+        config,
+        primitive_name,
+        {
+            "target": record.id,
             "container_names": record.container_names,
         },
     )

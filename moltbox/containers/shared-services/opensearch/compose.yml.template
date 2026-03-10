@@ -3,12 +3,29 @@ services:
     image: "${OPENSEARCH_IMAGE:-opensearchproject/opensearch:2.18.0}"
     container_name: "{{ container_name }}"
     restart: unless-stopped
-    ports:
-      - "${OPENSEARCH_PORT:-9200}:9200"
+    env_file:
+      - "{{ runtime_root }}/.env"
+      - "{{ runtime_root }}/container.env"
     environment:
-      OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS:--Xms1g -Xmx1g}"
-      discovery.type: single-node
-      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS:--Xms2g -Xmx2g}"
+      discovery.type: "${DISCOVERY_TYPE:-single-node}"
+      plugins.security.disabled: "${PLUGINS_SECURITY_DISABLED:-true}"
     volumes:
-      - "./opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro"
-      - "{{ shared_root }}/data:/usr/share/opensearch/data"
+      - "./config/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro"
+      - opensearch_data:/usr/share/opensearch/data
+    networks:
+      - moltbox_internal
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - bash -lc 'exec 3<>/dev/tcp/127.0.0.1/9200' >/dev/null 2>&1 || exit 1
+      interval: 20s
+      timeout: 8s
+      retries: 15
+      start_period: 35s
+
+volumes:
+  opensearch_data:
+
+networks:
+  moltbox_internal:
