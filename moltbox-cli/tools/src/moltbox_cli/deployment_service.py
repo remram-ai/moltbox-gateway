@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
@@ -55,6 +56,10 @@ def _runtime_root_payload(record, render_details: dict[str, Any]) -> dict[str, s
         "runtime_root_source_dir": rendered_runtime_root_dir,
         "gateway_port": str(render_details.get("gateway_port") or ""),
     }
+
+
+def _render_requires_build(render_dir: str) -> bool:
+    return (Path(render_dir) / "Dockerfile").exists()
 
 
 def render_assets(config: AppConfig, target: str, profile: str | None = None) -> dict[str, Any]:
@@ -174,6 +179,7 @@ def deploy_target(config: AppConfig, target: str) -> dict[str, Any]:
             "container_names": record.container_names,
             "remove_orphans": record.target_class != "shared_service",
             **_runtime_root_payload(record, render_details),
+            "build_images": _render_requires_build(render_dir),
         },
     )
     validate_result = run_primitive(

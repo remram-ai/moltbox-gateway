@@ -63,6 +63,7 @@ PRIMITIVES: dict[str, PrimitiveDefinition] = {
             "compose_project",
             "container_names",
             "remove_orphans",
+            "build_images",
             "runtime_root",
             "runtime_root_source_dir",
             "gateway_port",
@@ -138,7 +139,7 @@ PRIMITIVES: dict[str, PrimitiveDefinition] = {
         "Run baseline container validation for a deploy-managed target.",
         "host/commands/validate/validate-target.py",
         False,
-        ("target", "validator_key", "container_names"),
+        ("target", "validator_key", "container_names", "validation_timeout_seconds", "validation_poll_interval_seconds"),
     ),
 }
 

@@ -256,6 +256,8 @@ def _deploy_target(payload: dict[str, Any]) -> dict[str, Any]:
     _sync_runtime_root(payload)
     render_dir = Path(str(payload["render_dir"]))
     compose_args = ["up", "-d"]
+    if bool(payload.get("build_images", False)):
+        compose_args.append("--build")
     if bool(payload.get("remove_orphans", True)):
         compose_args.append("--remove-orphans")
     command = _compose_command(render_dir, str(payload["compose_project"]), compose_args)
@@ -366,16 +368,37 @@ def _restore_target_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
 def _validate_target(payload: dict[str, Any]) -> dict[str, Any]:
     if not _docker_available():
         return _result("validate_target", False, errors=["docker_not_available"])
-    timeout_seconds = int(os.environ.get("MOLTBOX_VALIDATE_TIMEOUT_SECONDS", "90"))
-    deadline = time.monotonic() + max(timeout_seconds, 0)
-    containers: list[dict[str, Any]] = []
-    errors: list[str] = []
-    while True:
-        containers = _container_details([str(item) for item in payload.get("container_names", [])])
+def _validation_pending(containers: list[dict[str, Any]]) -> bool:
+    for container in containers:
+        if not container["present"]:
+            return True
+        if container["state"] in {"created", "restarting"}:
+            return True
+        if container["state"] == "running" and container["health"] == "starting":
+            return True
+    return False
+
+
+def _validate_target(payload: dict[str, Any]) -> dict[str, Any]:
+    if not _docker_available():
+        return _result("validate_target", False, errors=["docker_not_available"])
+    container_names = [str(item) for item in payload.get("container_names", [])]
+    timeout_seconds = max(
+        int(payload.get("validation_timeout_seconds", os.environ.get("MOLTBOX_VALIDATE_TIMEOUT_SECONDS", 90))),
+        0,
+    )
+    poll_interval_seconds = max(
+        float(payload.get("validation_poll_interval_seconds", os.environ.get("MOLTBOX_VALIDATE_POLL_INTERVAL_SECONDS", 2))),
+        0,
+    )
+    deadline = time.monotonic() + timeout_seconds
+    containers = _container_details(container_names)
+    errors = _validation_errors(containers)
+    while errors and _validation_pending(containers) and time.monotonic() < deadline:
+        if poll_interval_seconds:
+            time.sleep(poll_interval_seconds)
+        containers = _container_details(container_names)
         errors = _validation_errors(containers)
-        if not errors or time.monotonic() >= deadline:
-            break
-        time.sleep(2)
     return _result(
         "validate_target",
         not errors,

@@ -2,6 +2,9 @@ services:
   tools:
     image: "${MOLTBOX_TOOLS_IMAGE:-moltbox-tools:local}"
     container_name: "{{ container_name }}"
+    user: "{{ container_uid }}:{{ container_gid }}"
+    group_add:
+      - "{{ docker_socket_gid }}"
     restart: unless-stopped
     ports:
       - "${MOLTBOX_TOOLS_PORT:-{{ gateway_port }}}:7474"
@@ -10,6 +13,7 @@ services:
       MOLTBOX_INTERNAL_HOST: "0.0.0.0"
       MOLTBOX_INTERNAL_PORT: "7474"
       MOLTBOX_STATE_ROOT: "{{ state_root }}"
+      MOLTBOX_TOOLS_PORT: "${MOLTBOX_TOOLS_PORT:-{{ gateway_port }}}"
       MOLTBOX_RUNTIME_ROOT: "{{ runtime_artifacts_root }}"
     volumes:
       - "{{ state_root }}:{{ state_root }}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -47,10 +48,38 @@ def rendered_output_dir(config: AppConfig, target: str, profile: str | None) -> 
     return config.layout.deploy_dir / "rendered" / bucket / target
 
 
+def _existing_owner(path: Path) -> tuple[str, str]:
+    override_uid = os.environ.get("MOLTBOX_CONTAINER_UID")
+    override_gid = os.environ.get("MOLTBOX_CONTAINER_GID")
+    if override_uid and override_gid:
+        return override_uid, override_gid
+    for candidate in (path, *path.parents):
+        if not candidate.exists():
+            continue
+        try:
+            stat_result = candidate.stat()
+        except OSError:
+            continue
+        return str(stat_result.st_uid), str(stat_result.st_gid)
+    return str(getattr(os, "getuid", lambda: 1000)()), str(getattr(os, "getgid", lambda: 1000)())
+
+
+def _docker_socket_gid(default_gid: str) -> str:
+    override_gid = os.environ.get("MOLTBOX_DOCKER_SOCKET_GID")
+    if override_gid:
+        return override_gid
+    socket_path = Path("/var/run/docker.sock")
+    try:
+        return str(socket_path.stat().st_gid)
+    except OSError:
+        return default_gid
+
+
 def render_context(config: AppConfig, target: str) -> dict[str, str]:
     record = get_target(config, target)
     runtime_root = record.runtime_root or ""
     shared_root = str(config.layout.shared_dir / target) if record.target_class == "shared_service" else ""
+    container_uid, container_gid = _existing_owner(config.state_root)
     data_volume_name = {
         "ollama": "moltbox_ollama_data",
         "opensearch": "moltbox_opensearch_data",
@@ -73,6 +102,9 @@ def render_context(config: AppConfig, target: str) -> dict[str, str]:
         "state_root": str(config.state_root),
         "runtime_artifacts_root": str(config.runtime_artifacts_root),
         "gateway_port": gateway_port,
+        "container_uid": container_uid,
+        "container_gid": container_gid,
+        "docker_socket_gid": _docker_socket_gid(container_gid),
     }
 
 
