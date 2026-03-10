@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -325,10 +326,7 @@ def _restore_target_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _validate_target(payload: dict[str, Any]) -> dict[str, Any]:
-    if not _docker_available():
-        return _result("validate_target", False, errors=["docker_not_available"])
-    containers = _container_details([str(item) for item in payload.get("container_names", [])])
+def _validation_errors(containers: list[dict[str, Any]]) -> list[str]:
     errors: list[str] = []
     for container in containers:
         if not container["present"]:
@@ -339,6 +337,34 @@ def _validate_target(payload: dict[str, Any]) -> dict[str, Any]:
         health = container["health"]
         if health and health != "healthy":
             errors.append(f"container '{container['name']}' health is '{health}'")
+    return errors
+
+
+def _validation_pending(containers: list[dict[str, Any]]) -> bool:
+    for container in containers:
+        if not container["present"]:
+            return True
+        if container["state"] in {"created", "restarting"}:
+            return True
+        if container["state"] == "running" and container["health"] == "starting":
+            return True
+    return False
+
+
+def _validate_target(payload: dict[str, Any]) -> dict[str, Any]:
+    if not _docker_available():
+        return _result("validate_target", False, errors=["docker_not_available"])
+    container_names = [str(item) for item in payload.get("container_names", [])]
+    timeout_seconds = max(int(payload.get("validation_timeout_seconds", 90)), 0)
+    poll_interval_seconds = max(float(payload.get("validation_poll_interval_seconds", 2)), 0)
+    deadline = time.monotonic() + timeout_seconds
+    containers = _container_details(container_names)
+    errors = _validation_errors(containers)
+    while errors and _validation_pending(containers) and time.monotonic() < deadline:
+        if poll_interval_seconds:
+            time.sleep(poll_interval_seconds)
+        containers = _container_details(container_names)
+        errors = _validation_errors(containers)
     return _result(
         "validate_target",
         not errors,
