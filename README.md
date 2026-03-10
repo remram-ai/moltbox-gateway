@@ -1,93 +1,31 @@
 # remram-gateway
 
-Execution substrate for the Remram system.
+`remram-gateway` contains multiple subsystems. The active MoltBox work in this repository is split into two artifacts:
 
-Remram Gateway provisions and runs the local OpenClaw control plane that powers Remram. It wires models, registers agents, connects to supporting services, and defines concrete appliance profiles such as Moltbox.
+- `moltbox/` for appliance deployment artifacts
+- `moltbox-cli/` for the software project that implements the `moltbox` command
 
-## Runtime Architecture
-
-This repository is an installer and template source.
-
-Repository:
-
-```text
-~/git/remram-gateway
-```
-
-Live runtime configuration and state:
-
-```text
-~/.openclaw
-```
-
-The `moltbox/.openclaw/` and `moltbox/config/` directories contain templates only. `scripts/20-bootstrap.sh` copies those templates into `~/.openclaw` on first run and leaves existing runtime files in place on subsequent runs.
-
-Containers must read runtime configuration from `~/.openclaw`, not from repository paths.
-They must never read live configuration from `~/git/remram-gateway`.
-
-## Repository Structure
+The repository layout is intentionally narrow:
 
 ```text
 remram-gateway/
-  README.md
-  moltbox/
-    .openclaw/                 # Template OpenClaw YAML files
-    config/                    # Template env/config files and compose definition
-    scripts/                   # Installer, bootstrap, validation, maintenance
-    moltbox-operator-runbook.md
-    moltbox-implementation-guide.md
+├─ archive/
+│  └─ MoltBox-Legacy/
+├─ docs/
+├─ moltbox/
+│  ├─ containers/
+│  ├─ hardware/
+│  └─ config/
+└─ moltbox-cli/
+   ├─ runtime/
+   ├─ host/
+   └─ tools/
 ```
 
-## Moltbox Runtime Layout
+Start with these references:
 
-After bootstrap, the runtime root should look like:
+- `docs/repository_taxonomy.md`
+- `docs/cli/README.md`
+- `docs/architecture/moltbox_cli_architecture.md`
 
-```text
-~/.openclaw/
-  .env
-  container.env
-  model-runtime.yml
-  opensearch.yml
-  agents.yaml
-  channels.yaml
-  routing.yaml
-  tools.yaml
-  escalation.yaml
-  agents/main/agent/models.json
-  logs/
-```
-
-## Usage
-
-Use the operator runbook for deployment:
-
-[`moltbox/moltbox-operator-runbook.md`](/d:/Development/RemRam/remram-gateway/moltbox/moltbox-operator-runbook.md)
-
-Typical lifecycle:
-
-1. Run [`10-install.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/10-install.sh) on the Ubuntu host.
-2. Build or supply the OpenClaw image referenced by `OPENCLAW_IMAGE`.
-3. Run [`20-bootstrap.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/20-bootstrap.sh) to create `~/.openclaw` and start the stack.
-4. Run [`30-validate.sh`](/d:/Development/RemRam/remram-gateway/moltbox/scripts/30-validate.sh) to verify container health and internal connectivity.
-
-For manual Docker Compose operations, export the runtime root first:
-
-```bash
-export MOLTBOX_RUNTIME_ROOT="$HOME/.openclaw"
-cd ~/git/remram-gateway/moltbox/config
-docker compose ps
-```
-
-Quick runtime mount verification:
-
-```bash
-docker inspect moltbox-openclaw | grep openclaw
-```
-
-Expected output should reference `~/.openclaw` and never the repository.
-
-## Remote Development
-
-Recommended workflow: VS Code with Remote-SSH connected directly to the Moltbox host.
-
-Edit runtime files under `~/.openclaw` for live configuration changes. Edit repository files under `~/git/remram-gateway/moltbox/` only when changing templates, scripts, or compose definitions.
+Archive material is reference-only. Active code must not import from `archive/MoltBox-Legacy/`.

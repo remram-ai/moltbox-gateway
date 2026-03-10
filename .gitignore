@@ -1,3 +1,9 @@
 moltbox/debug-service/.venv/
 moltbox/debug-service/src/*.egg-info/
 moltbox/debug-service/src/**/__pycache__/
+**/__pycache__/
+.pytest_cache/
+archive/*
+!archive/MoltBox-Legacy/
+archive/MoltBox-Legacy/*
+!archive/MoltBox-Legacy/README.md

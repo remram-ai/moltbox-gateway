@@ -1,0 +1,16 @@
+services:
+  control-plane:
+    image: "${REMRAM_CONTROL_PLANE_IMAGE:-remram/control-plane:latest}"
+    container_name: "{{ container_name }}"
+    restart: unless-stopped
+    ports:
+      - "${REMRAM_CONTROL_PLANE_PORT:-{{ gateway_port }}}:7474"
+    environment:
+      REMRAM_STATE_ROOT: "{{ state_root }}"
+      REMRAM_RUNTIME_ROOT: "{{ runtime_artifacts_root }}"
+    volumes:
+      - "{{ state_root }}:{{ state_root }}"
+    command:
+      - moltbox
+      - tools
+      - serve
