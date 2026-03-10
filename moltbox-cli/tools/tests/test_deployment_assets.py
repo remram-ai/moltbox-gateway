@@ -34,6 +34,10 @@ def test_tools_render_uses_tools_container_assets(tmp_path: Path, monkeypatch) -
     asset_path = rendered["asset_path"].replace("/", "\\")
     assert "moltbox\\containers\\tools" in asset_path
     assert Path(rendered["output_dir"]) == config.layout.deploy_dir / "rendered" / "shared" / "tools"
+    compose_text = (Path(rendered["output_dir"]) / "compose.yml").read_text(encoding="utf-8")
+    assert "image: \"${MOLTBOX_TOOLS_IMAGE:-moltbox-tools:local}\"" in compose_text
+    assert "container_name: \"moltbox-tools\"" in compose_text
+    assert "/var/run/docker.sock:/var/run/docker.sock" in compose_text
     manifest = read_json_file(Path(rendered["render_manifest_path"]))
     source_paths = [path.replace("/", "\\") for path in manifest["source_asset_paths"]]
     assert source_paths
@@ -71,5 +75,11 @@ def test_registry_bootstrap_reconciles_stale_tools_asset_paths(tmp_path: Path, m
     stored = read_json_file(stale_path)
 
     assert target.asset_path == "tools"
+    assert target.compose_project == "moltbox-tools"
+    assert target.container_name == "moltbox-tools"
+    assert target.container_names == ["moltbox-tools"]
     assert stored["asset_path"] == "tools"
+    assert stored["compose_project"] == "moltbox-tools"
+    assert stored["container_name"] == "moltbox-tools"
+    assert stored["container_names"] == ["moltbox-tools"]
     assert stored["metadata"]["aliases"] == ["cli", "control", "control-plane"]

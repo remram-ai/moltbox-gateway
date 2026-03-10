@@ -119,13 +119,21 @@ def _resolve_int(flag_value: int | None, env_names: tuple[str, ...], config_valu
 
 def resolve_config(args: Any | None = None) -> AppConfig:
     state_root_default = Path.home() / ".remram"
-    config_path_default = state_root_default / "control-plane" / "config.yaml"
+    config_path_default = state_root_default / "tools" / "config.yaml"
+    legacy_config_path_default = state_root_default / "control-plane" / "config.yaml"
     config_path = _resolve_path(
         getattr(args, "config_path", None),
         ("MOLTBOX_CONFIG_PATH", "REMRAM_CONFIG_PATH"),
         None,
         config_path_default,
     )
+    if (
+        getattr(args, "config_path", None) is None
+        and _env_value("MOLTBOX_CONFIG_PATH", "REMRAM_CONFIG_PATH") is None
+        and not config_path.exists()
+        and legacy_config_path_default.exists()
+    ):
+        config_path = legacy_config_path_default.resolve()
     config_payload = _load_config_file(config_path)
 
     state_root = _resolve_path(

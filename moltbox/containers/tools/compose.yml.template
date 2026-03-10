@@ -1,15 +1,17 @@
 services:
-  control-plane:
-    image: "${REMRAM_CONTROL_PLANE_IMAGE:-remram/control-plane:latest}"
+  tools:
+    image: "${MOLTBOX_TOOLS_IMAGE:-moltbox-tools:local}"
     container_name: "{{ container_name }}"
     restart: unless-stopped
     ports:
-      - "${REMRAM_CONTROL_PLANE_PORT:-{{ gateway_port }}}:7474"
+      - "${MOLTBOX_TOOLS_PORT:-{{ gateway_port }}}:7474"
     environment:
-      REMRAM_STATE_ROOT: "{{ state_root }}"
-      REMRAM_RUNTIME_ROOT: "{{ runtime_artifacts_root }}"
+      MOLTBOX_STATE_ROOT: "{{ state_root }}"
+      MOLTBOX_RUNTIME_ROOT: "{{ runtime_artifacts_root }}"
     volumes:
       - "{{ state_root }}:{{ state_root }}"
+      - "{{ runtime_artifacts_root }}:{{ runtime_artifacts_root }}"
+      - "/var/run/docker.sock:/var/run/docker.sock"
     command:
       - moltbox
       - tools

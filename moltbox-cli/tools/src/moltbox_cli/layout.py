@@ -116,7 +116,7 @@ def build_host_layout(
     config_path: Path | None = None,
 ) -> HostLayout:
     state_root = (root or (Path.home() / ".remram")).expanduser().resolve()
-    control_plane_dir = state_root / "control-plane"
+    control_plane_dir = state_root / "tools"
     runtime_root = (runtime_artifacts_root or (Path.home() / "Moltbox")).expanduser().resolve()
     resolved_config_path = (config_path or (control_plane_dir / "config.yaml")).expanduser().resolve()
     return HostLayout(
