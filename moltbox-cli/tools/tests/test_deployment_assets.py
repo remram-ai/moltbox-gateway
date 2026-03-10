@@ -41,6 +41,7 @@ def test_tools_render_uses_tools_container_assets(tmp_path: Path, monkeypatch) -
     assert "group_add:" in compose_text
     assert "MOLTBOX_INTERNAL_HOST: \"0.0.0.0\"" in compose_text
     assert "MOLTBOX_CONFIG_PATH: " in compose_text
+    assert "MOLTBOX_TOOLS_PORT: " in compose_text
     assert "/var/run/docker.sock:/var/run/docker.sock" in compose_text
     manifest = read_json_file(Path(rendered["render_manifest_path"]))
     source_paths = [path.replace("/", "\\") for path in manifest["source_asset_paths"]]
