@@ -2,10 +2,6 @@ from __future__ import annotations
 
 import argparse
 
-import uvicorn
-from fastapi import FastAPI
-from starlette.routing import Mount
-
 from .config import resolve_config
 from .mcp_adapter import create_mcp_server
 
@@ -24,6 +20,6 @@ def main() -> None:
     args = build_parser().parse_args()
     config = resolve_config(args)
     mcp = create_mcp_server(config)
-    app = FastAPI(title="Remram MCP Adapter")
-    app.router.routes.append(Mount("/", app=mcp.streamable_http_app()))
-    uvicorn.run(app, host=args.host, port=args.port, access_log=False, log_config=None)
+    mcp.settings.host = args.host
+    mcp.settings.port = args.port
+    mcp.run(transport="streamable-http")
