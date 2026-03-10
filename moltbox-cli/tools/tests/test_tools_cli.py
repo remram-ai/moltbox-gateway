@@ -10,6 +10,10 @@ from pathlib import Path
 CLI_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = CLI_ROOT / "tools" / "src"
 
+sys.path.insert(0, str(SRC_DIR))
+
+from moltbox_cli.layout import find_repo_root
+
 
 def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     merged_env = os.environ.copy()
@@ -142,3 +146,11 @@ def test_tools_deploy_is_not_exposed(tmp_path: Path) -> None:
     assert completed.returncode == 2
     assert "usage: moltbox tools" in completed.stderr
     assert "invalid choice" in completed.stderr
+
+
+def test_find_repo_root_accepts_baked_container_checkout(tmp_path: Path, monkeypatch) -> None:
+    repo_root = tmp_path / "remram-gateway"
+    (repo_root / "moltbox").mkdir(parents=True)
+    (repo_root / "moltbox-cli").mkdir(parents=True)
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(repo_root))
+    assert find_repo_root() == repo_root.resolve()

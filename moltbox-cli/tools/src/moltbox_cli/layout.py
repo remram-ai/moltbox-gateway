@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,9 +85,17 @@ class HostLayout:
 
 
 def find_repo_root(start: Path | None = None) -> Path:
+    configured = os.environ.get("MOLTBOX_REPO_ROOT")
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if (candidate / "moltbox").exists() and (candidate / "moltbox-cli").exists():
+            return candidate
+        raise RuntimeError(f"MOLTBOX_REPO_ROOT does not point to a valid remram-gateway checkout: {candidate}")
     current = (start or Path(__file__)).resolve()
     for candidate in (current, *current.parents):
         if (candidate / ".git").exists():
+            return candidate
+        if (candidate / "moltbox").exists() and (candidate / "moltbox-cli").exists():
             return candidate
     raise RuntimeError("Unable to locate the repository root from the MoltBox CLI package path")
 
