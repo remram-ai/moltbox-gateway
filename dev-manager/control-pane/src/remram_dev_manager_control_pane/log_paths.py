@@ -25,7 +25,7 @@ def service_log_file(config: AppConfig, service_name: str) -> Path:
 
 
 def target_log_service_name(target_id: str) -> str:
-    if target_id == "control":
+    if target_id == "control-plane":
         return "control-plane"
     if target_id in {"dev", "test", "prod"}:
         return f"openclaw-{target_id}"

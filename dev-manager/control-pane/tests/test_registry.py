@@ -22,5 +22,15 @@ def test_registry_bootstrap_is_idempotent(tmp_path: Path, monkeypatch) -> None:
     first = ensure_registry_bootstrap(config)
     second = ensure_registry_bootstrap(config)
     assert [record.id for record in first] == [record.id for record in second]
-    assert (tmp_path / ".remram" / "state" / "targets" / "control.json").exists()
+    assert [record.id for record in first] == [
+        "control-plane",
+        "ollama",
+        "opensearch",
+        "caddy",
+        "dev",
+        "test",
+        "prod",
+    ]
+    assert (tmp_path / ".remram" / "state" / "targets" / "control-plane.json").exists()
+    assert not (tmp_path / ".remram" / "state" / "targets" / "control.json").exists()
     assert (tmp_path / "Moltbox" / "logs" / "control-plane").exists()

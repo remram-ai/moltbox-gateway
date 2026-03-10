@@ -1,0 +1,19 @@
+services:
+  openclaw:
+    image: "${OPENCLAW_IMAGE:-openclaw:local}"
+    container_name: "{{ container_name }}"
+    restart: unless-stopped
+    ports:
+      - "${OPENCLAW_PORT:-{{ gateway_port }}}:18789"
+    volumes:
+      - "{{ runtime_root }}:/home/node/.openclaw"
+    environment:
+      REMRAM_RUNTIME_PROFILE: "{{ profile }}"
+    command:
+      - node
+      - dist/index.js
+      - gateway
+      - --bind
+      - lan
+      - --port
+      - "18789"

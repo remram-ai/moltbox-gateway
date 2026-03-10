@@ -42,3 +42,15 @@ def test_unknown_target_returns_code_4(tmp_path: Path) -> None:
     assert completed.returncode == 4
     payload = json.loads(completed.stdout)
     assert payload["error_type"] == "target_not_found"
+
+
+def test_render_assets_returns_json(tmp_path: Path) -> None:
+    env = {
+        "REMRAM_STATE_ROOT": str(tmp_path / ".remram"),
+        "REMRAM_RUNTIME_ROOT": str(tmp_path / "Moltbox"),
+    }
+    completed = run_cli("render-assets", "--target", "ollama", env=env)
+    assert completed.returncode == 0
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is True
+    assert payload["target"] == "ollama"

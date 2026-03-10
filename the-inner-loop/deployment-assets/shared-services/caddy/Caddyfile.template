@@ -1,0 +1,23 @@
+:80 {
+  respond /healthz 200
+
+  @cli host moltbox-cli
+  handle @cli {
+    reverse_proxy host.docker.internal:7474
+  }
+
+  @dev host moltbox-dev
+  handle @dev {
+    reverse_proxy host.docker.internal:18789
+  }
+
+  @test host moltbox-test
+  handle @test {
+    reverse_proxy host.docker.internal:28789
+  }
+
+  @prod host moltbox-prod
+  handle @prod {
+    reverse_proxy host.docker.internal:38789
+  }
+}

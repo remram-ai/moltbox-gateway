@@ -1,0 +1,14 @@
+services:
+  opensearch:
+    image: "${OPENSEARCH_IMAGE:-opensearchproject/opensearch:2.18.0}"
+    container_name: "{{ container_name }}"
+    restart: unless-stopped
+    ports:
+      - "${OPENSEARCH_PORT:-9200}:9200"
+    environment:
+      OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS:--Xms1g -Xmx1g}"
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+    volumes:
+      - "./opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro"
+      - "{{ shared_root }}/data:/usr/share/opensearch/data"
