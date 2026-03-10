@@ -30,6 +30,13 @@ class TargetRecord:
     id: str
     target_class: str
     display_name: str
+    asset_path: str
+    compose_project: str
+    container_names: list[str]
+    snapshot_scope: str
+    validator_key: str
+    log_source: str
+    profile: str | None = None
     runtime_root: str | None = None
     service_name: str | None = None
     container_name: str | None = None
@@ -42,10 +49,18 @@ class TargetRecord:
             "id": self.id,
             "target_class": self.target_class,
             "display_name": self.display_name,
+            "asset_path": self.asset_path,
+            "compose_project": self.compose_project,
+            "container_names": _stringify(self.container_names),
+            "snapshot_scope": self.snapshot_scope,
+            "validator_key": self.validator_key,
+            "log_source": self.log_source,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "metadata": _stringify(self.metadata),
         }
+        if self.profile is not None:
+            payload["profile"] = self.profile
         if self.runtime_root is not None:
             payload["runtime_root"] = self.runtime_root
         if self.service_name is not None:

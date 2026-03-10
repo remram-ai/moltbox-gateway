@@ -1,5 +1,6 @@
 ALIASES = {
-    "cli": "control",
+    "cli": "control-plane",
+    "control": "control-plane",
     "prime": "prod",
 }
 

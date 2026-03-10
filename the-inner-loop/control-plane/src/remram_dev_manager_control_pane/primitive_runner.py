@@ -23,7 +23,7 @@ class PrimitiveDefinition:
     allowed_payload_keys: tuple[str, ...]
 
     def source_path(self) -> Path:
-        return build_repo_layout().dev_manager_dir / "host-tools" / self.relative_source_path
+        return build_repo_layout().host_tools_source_dir / self.relative_source_path
 
 
 PRIMITIVES: dict[str, PrimitiveDefinition] = {
