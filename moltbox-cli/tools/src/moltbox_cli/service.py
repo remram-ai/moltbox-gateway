@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import uvicorn
 
 from .config import AppConfig
-from .errors import ControlPlaneUnavailableError
+from .errors import ToolsServiceUnavailableError
 from .http_app import create_http_app
 from .log_paths import service_log_file
 from .logging_setup import configure_logger, log_event
@@ -23,17 +23,17 @@ def _check_bind_available(host: str, port: int) -> None:
         try:
             sock.bind((host, port))
         except OSError as exc:
-            raise ControlPlaneUnavailableError(
-                f"unable to bind internal control-plane service to {host}:{port}",
+            raise ToolsServiceUnavailableError(
+                f"unable to bind internal tools service to {host}:{port}",
                 "choose a different internal port or stop the conflicting process before running `moltbox tools serve` again",
                 host=host,
                 port=port,
             ) from exc
 
 
-def run_control_plane_service(config: AppConfig) -> None:
+def run_tools_service(config: AppConfig) -> None:
     ensure_registry_bootstrap(config)
-    logger = configure_logger(service_log_file(config, "control-plane"))
+    logger = configure_logger(service_log_file(config, "tools"))
     version = resolve_version_info().version
     _check_bind_available(config.internal_host, config.internal_port)
     write_pid(config.layout.pid_file, os.getpid())
@@ -49,7 +49,7 @@ def run_control_plane_service(config: AppConfig) -> None:
             "version": version,
         },
     )
-    log_event(logger, logging.INFO, "startup", "control-plane", "starting control-plane service")
+    log_event(logger, logging.INFO, "startup", "tools", "starting tools service")
     app = create_http_app(config, logger)
     try:
         uvicorn.run(app, host=config.internal_host, port=config.internal_port, access_log=False, log_config=None)
@@ -66,6 +66,6 @@ def run_control_plane_service(config: AppConfig) -> None:
                 "version": version,
             },
         )
-        log_event(logger, logging.ERROR, "fatal_error", "control-plane", "control-plane service terminated unexpectedly")
+        log_event(logger, logging.ERROR, "fatal_error", "tools", "tools service terminated unexpectedly")
         clear_pid(config.layout.pid_file)
         raise

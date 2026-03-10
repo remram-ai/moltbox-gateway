@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 CANONICAL_LOG_DIRS = (
-    "control-plane",
+    "tools",
     "openclaw-dev",
     "openclaw-test",
     "openclaw-prod",

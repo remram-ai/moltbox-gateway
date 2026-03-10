@@ -35,7 +35,7 @@ def create_http_app(config: AppConfig, logger: logging.Logger) -> FastAPI:
                 "version": version,
             },
         )
-        log_event(logger, logging.INFO, "ready", "control-plane", "control-plane service is ready")
+        log_event(logger, logging.INFO, "ready", "tools", "tools service is ready")
         try:
             yield
         finally:
@@ -52,9 +52,9 @@ def create_http_app(config: AppConfig, logger: logging.Logger) -> FastAPI:
                 },
             )
             clear_pid(config.layout.pid_file)
-            log_event(logger, logging.INFO, "shutdown", "control-plane", "control-plane service stopped")
+            log_event(logger, logging.INFO, "shutdown", "tools", "tools service stopped")
 
-    app = FastAPI(title="MoltBox CLI Service", lifespan=lifespan)
+    app = FastAPI(title="MoltBox Tools Service", lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict:

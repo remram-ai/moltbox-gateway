@@ -57,10 +57,10 @@ class TargetNotFoundError(MoltboxCliError):
         )
 
 
-class ControlPlaneUnavailableError(MoltboxCliError):
+class ToolsServiceUnavailableError(MoltboxCliError):
     def __init__(self, error_message: str, recovery_message: str, **details: Any) -> None:
         super().__init__(
-            error_type="control_plane_unavailable",
+            error_type="tools_service_unavailable",
             error_message=error_message,
             recovery_message=recovery_message,
             exit_code=exit_codes.CONTROL_PLANE_UNAVAILABLE,

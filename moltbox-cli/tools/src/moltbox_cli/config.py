@@ -11,6 +11,14 @@ from .errors import ConfigError
 from .layout import HostLayout, build_host_layout
 
 
+def _env_value(*env_names: str) -> str | None:
+    for env_name in env_names:
+        raw = os.environ.get(env_name)
+        if raw:
+            return raw
+    return None
+
+
 def _deep_get(payload: dict[str, Any], *keys: str) -> Any:
     current: Any = payload
     for key in keys:
@@ -64,8 +72,8 @@ def _load_config_file(config_path: Path) -> dict[str, Any]:
     return loaded
 
 
-def _resolve_path(flag_value: str | None, env_name: str, config_value: Any, default: Path) -> Path:
-    raw = flag_value if flag_value else os.environ.get(env_name)
+def _resolve_path(flag_value: str | None, env_names: tuple[str, ...], config_value: Any, default: Path) -> Path:
+    raw = flag_value if flag_value else _env_value(*env_names)
     if raw:
         return Path(raw).expanduser().resolve()
     if isinstance(config_value, str) and config_value:
@@ -73,8 +81,8 @@ def _resolve_path(flag_value: str | None, env_name: str, config_value: Any, defa
     return default.expanduser().resolve()
 
 
-def _resolve_string(flag_value: str | None, env_name: str, config_value: Any, default: str) -> str:
-    raw = flag_value if flag_value else os.environ.get(env_name)
+def _resolve_string(flag_value: str | None, env_names: tuple[str, ...], config_value: Any, default: str) -> str:
+    raw = flag_value if flag_value else _env_value(*env_names)
     if raw:
         return raw
     if isinstance(config_value, str) and config_value:
@@ -82,18 +90,19 @@ def _resolve_string(flag_value: str | None, env_name: str, config_value: Any, de
     return default
 
 
-def _resolve_int(flag_value: int | None, env_name: str, config_value: Any, default: int) -> int:
+def _resolve_int(flag_value: int | None, env_names: tuple[str, ...], config_value: Any, default: int) -> int:
     if flag_value is not None:
         return flag_value
-    env_raw = os.environ.get(env_name)
+    env_raw = _env_value(*env_names)
     if env_raw:
         try:
             return int(env_raw)
         except ValueError as exc:
+            env_label = " or ".join(env_names)
             raise ConfigError(
-                f"environment variable {env_name} must be an integer",
-                f"set {env_name} to a numeric port value and rerun the command",
-                env_name=env_name,
+                f"environment variable {env_label} must be an integer",
+                f"set one of {env_label} to a numeric port value and rerun the command",
+                env_names=list(env_names),
                 env_value=env_raw,
             ) from exc
     if config_value is None:
@@ -111,36 +120,41 @@ def _resolve_int(flag_value: int | None, env_name: str, config_value: Any, defau
 def resolve_config(args: Any | None = None) -> AppConfig:
     state_root_default = Path.home() / ".remram"
     config_path_default = state_root_default / "control-plane" / "config.yaml"
-    config_path = _resolve_path(getattr(args, "config_path", None), "REMRAM_CONFIG_PATH", None, config_path_default)
+    config_path = _resolve_path(
+        getattr(args, "config_path", None),
+        ("MOLTBOX_CONFIG_PATH", "REMRAM_CONFIG_PATH"),
+        None,
+        config_path_default,
+    )
     config_payload = _load_config_file(config_path)
 
     state_root = _resolve_path(
         getattr(args, "state_root", None),
-        "REMRAM_STATE_ROOT",
+        ("MOLTBOX_STATE_ROOT", "REMRAM_STATE_ROOT"),
         _deep_get(config_payload, "paths", "state_root"),
         state_root_default,
     )
     runtime_artifacts_root = _resolve_path(
         getattr(args, "runtime_artifacts_root", None),
-        "REMRAM_RUNTIME_ROOT",
+        ("MOLTBOX_RUNTIME_ROOT", "REMRAM_RUNTIME_ROOT"),
         _deep_get(config_payload, "paths", "runtime_root"),
         Path.home() / "Moltbox",
     )
     internal_host = _resolve_string(
         getattr(args, "internal_host", None),
-        "REMRAM_INTERNAL_HOST",
+        ("MOLTBOX_INTERNAL_HOST", "REMRAM_INTERNAL_HOST"),
         _deep_get(config_payload, "service", "host"),
         "127.0.0.1",
     )
     internal_port = _resolve_int(
         getattr(args, "internal_port", None),
-        "REMRAM_INTERNAL_PORT",
+        ("MOLTBOX_INTERNAL_PORT", "REMRAM_INTERNAL_PORT"),
         _deep_get(config_payload, "service", "port"),
         7474,
     )
     cli_path = _resolve_string(
         getattr(args, "cli_path", None),
-        "REMRAM_CLI_PATH",
+        ("MOLTBOX_CLI_PATH", "REMRAM_CLI_PATH"),
         _deep_get(config_payload, "cli", "path"),
         "moltbox",
     )

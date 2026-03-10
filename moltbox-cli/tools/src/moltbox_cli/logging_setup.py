@@ -13,7 +13,7 @@ class JsonFormatter(logging.Formatter):
             "ts": datetime.now(tz=UTC).isoformat(),
             "level": record.levelname.lower(),
             "event": getattr(record, "event", "log"),
-            "component": getattr(record, "component", "control-plane"),
+            "component": getattr(record, "component", "tools"),
             "msg": record.getMessage(),
         }
         return json.dumps(payload)

@@ -20,8 +20,8 @@ class Args:
 
 
 def test_health_recovery_points_to_tools_serve(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("REMRAM_STATE_ROOT", str(tmp_path / ".remram"))
-    monkeypatch.setenv("REMRAM_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
     config = resolve_config(Args())
     payload = build_cli_health_payload(config, "test-version")
     assert payload["serve_state"] == "down"

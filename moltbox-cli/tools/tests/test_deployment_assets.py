@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "src"))
+
+from moltbox_cli.config import resolve_config
+from moltbox_cli.deployment_service import render_assets
+from moltbox_cli.jsonio import read_json_file, write_json_file
+from moltbox_cli.registry import get_target
+from moltbox_cli.registry_store import target_file_path
+
+
+class Args:
+    config_path = None
+    state_root = None
+    runtime_artifacts_root = None
+    internal_host = None
+    internal_port = None
+    cli_path = None
+
+
+def test_tools_render_uses_tools_container_assets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    config = resolve_config(Args())
+    payload = render_assets(config, "tools")
+    assert payload["ok"] is True
+    assert payload["target"] == "tools"
+    assert payload["command"] == "moltbox tools update"
+    rendered = payload["render"]
+    asset_path = rendered["asset_path"].replace("/", "\\")
+    assert "moltbox\\containers\\tools" in asset_path
+    assert Path(rendered["output_dir"]) == config.layout.deploy_dir / "rendered" / "shared" / "tools"
+    manifest = read_json_file(Path(rendered["render_manifest_path"]))
+    source_paths = [path.replace("/", "\\") for path in manifest["source_asset_paths"]]
+    assert source_paths
+    assert all("moltbox\\containers\\tools" in path for path in source_paths)
+
+
+def test_registry_bootstrap_reconciles_stale_tools_asset_paths(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    config = resolve_config(Args())
+    config.layout.target_registry_dir.mkdir(parents=True, exist_ok=True)
+    stale_path = target_file_path(config.layout, "tools")
+    write_json_file(
+        stale_path,
+        {
+            "id": "tools",
+            "target_class": "tools",
+            "display_name": "MoltBox Tools",
+            "asset_path": "control-plane",
+            "compose_project": "moltbox-control-plane",
+            "container_names": ["control-plane"],
+            "snapshot_scope": "target",
+            "validator_key": "container_baseline",
+            "log_source": "docker_logs",
+            "runtime_root": str(config.layout.control_plane_dir),
+            "service_name": "tools",
+            "container_name": "control-plane",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "metadata": {"aliases": ["cli"], "hostname": "moltbox-cli"},
+        },
+    )
+
+    target = get_target(config, "tools")
+    stored = read_json_file(stale_path)
+
+    assert target.asset_path == "tools"
+    assert stored["asset_path"] == "tools"
+    assert stored["metadata"]["aliases"] == ["cli", "control", "control-plane"]

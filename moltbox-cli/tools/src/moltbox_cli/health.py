@@ -17,13 +17,13 @@ def _paths(config: AppConfig) -> dict[str, str]:
     return {
         "config_path": display_path(config.config_path),
         "state_root": display_path(config.layout.root),
-        "control_plane_dir": display_path(config.layout.control_plane_dir),
+        "tools_state_dir": display_path(config.layout.control_plane_dir),
         "runtime_state_file": display_path(config.layout.runtime_state_file),
         "pid_file": display_path(config.layout.pid_file),
         "target_registry_dir": display_path(config.layout.target_registry_dir),
         "runtime_artifacts_root": display_path(config.layout.runtime_artifacts_root),
         "logs_root": display_path(config.layout.logs_dir),
-        "serve_log": display_path(service_log_file(config, "control-plane")),
+        "serve_log": display_path(service_log_file(config, "tools")),
     }
 
 
@@ -37,7 +37,7 @@ def _base_health(config: AppConfig) -> dict[str, Any]:
         "paths": _paths(config),
         "started_at": None,
         "uptime": None,
-        "logs": [build_log_ref("serve", service_log_file(config, "control-plane")).as_dict()],
+        "logs": [build_log_ref("serve", service_log_file(config, "tools")).as_dict()],
         "error_message": "",
         "recovery_message": "",
     }
@@ -65,7 +65,7 @@ def build_local_health_payload(config: AppConfig, version: str) -> dict[str, Any
 
     payload["error_message"] = "serve process not running"
     payload["recovery_message"] = (
-        f"start with `moltbox tools serve` or inspect logs at {display_path(service_log_file(config, 'control-plane'))}"
+        f"start with `moltbox tools serve` or inspect logs at {display_path(service_log_file(config, 'tools'))}"
     )
     payload["serve_state"] = "down"
     return payload

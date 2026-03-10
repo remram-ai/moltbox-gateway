@@ -10,7 +10,7 @@ from .target_resolution import HOST_TARGETS, RUNTIME_TARGETS, resolve_target_ide
 
 RUNTIME_VERBS = {"deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart"}
 HOST_VERBS = {"deploy", "rollback", "status", "inspect", "logs"}
-TOOLS_VERBS = {"version", "health", "serve", "status", "inspect", "update", "deploy", "rollback", "logs"}
+TOOLS_VERBS = {"version", "health", "serve", "status", "inspect", "update", "rollback", "logs"}
 
 
 def _emit_and_exit(payload: dict[str, object]) -> None:
@@ -57,7 +57,7 @@ def _dispatch_target_action(config, target: str, verb: str) -> None:  # noqa: AN
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Canonical MoltBox operator CLI.")
+    parser = argparse.ArgumentParser(prog="moltbox", description="Canonical MoltBox operator CLI.")
     parser.add_argument("--config-path")
     parser.add_argument("--state-root")
     parser.add_argument("--runtime-artifacts-root")
@@ -70,27 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
     tools.add_argument("verb", choices=sorted(TOOLS_VERBS), help="Tooling verb.")
 
     host = subparsers.add_parser("host", help="Operate host services on the MoltBox machine.")
-    host.add_argument("service", help="One of caddy, ollama, or opensearch.")
+    host.add_argument("service", help="Host service such as caddy, ollama, or opensearch.")
     host.add_argument("verb", choices=sorted(HOST_VERBS), help="Host-service verb.")
 
     runtime = subparsers.add_parser("runtime", help="Operate OpenClaw runtime environments.")
-    runtime.add_argument("environment", help="Runtime environment, or a legacy runtime verb.")
-    runtime.add_argument("verb", help="Runtime verb, or a legacy runtime environment.")
-
-    version = subparsers.add_parser("version", help=argparse.SUPPRESS)
-    version.add_argument("legacy_ignored", nargs="?", help=argparse.SUPPRESS)
-    subparsers.add_parser("health", help=argparse.SUPPRESS)
-    subparsers.add_parser("serve", help=argparse.SUPPRESS)
-    subparsers.add_parser("list-targets", help=argparse.SUPPRESS)
-    status = subparsers.add_parser("status", help=argparse.SUPPRESS)
-    status.add_argument("--target", required=True, help="Canonical target id or supported alias.")
-    deploy = subparsers.add_parser("deploy", help=argparse.SUPPRESS)
-    deploy.add_argument("target", help="Canonical target id or supported alias.")
-    rollback = subparsers.add_parser("rollback", help=argparse.SUPPRESS)
-    rollback.add_argument("target", help="Canonical target id or supported alias.")
-    render_assets = subparsers.add_parser("render-assets", help=argparse.SUPPRESS)
-    render_assets.add_argument("--target", required=True, help="Canonical target id or supported alias.")
-    render_assets.add_argument("--profile", help="Explicit profile for runtime targets.")
+    runtime.add_argument("environment", choices=sorted(RUNTIME_TARGETS), help="Runtime environment.")
+    runtime.add_argument("verb", choices=sorted(RUNTIME_VERBS), help="Runtime verb.")
     return parser
 
 
@@ -98,44 +83,9 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     try:
-        if args.command == "version":
-            emit_json(handle_version())
-            return
-
         from .config import resolve_config
 
         config = resolve_config(args)
-        if args.command == "health":
-            from .commands.health import handle_health
-
-            emit_json(handle_health(config))
-            return
-
-        if args.command == "list-targets":
-            from .commands.targets import handle_list_targets
-
-            emit_json(handle_list_targets(config))
-            return
-
-        if args.command == "status":
-            from .commands.status import handle_status
-
-            _emit_and_exit(handle_status(config, args.target))
-
-        if args.command == "deploy":
-            from .commands.deploy import handle_deploy
-
-            _emit_and_exit(handle_deploy(config, args.target))
-
-        if args.command == "rollback":
-            from .commands.rollback import handle_rollback
-
-            _emit_and_exit(handle_rollback(config, args.target))
-
-        if args.command == "render-assets":
-            from .commands.render_assets import handle_render_assets
-
-            _emit_and_exit(handle_render_assets(config, args.target, args.profile))
 
         if args.command == "tools":
             if args.verb == "version":
@@ -157,33 +107,21 @@ def main() -> None:
                 emit_json(handle_list_targets(config))
                 return
             _dispatch_target_action(config, "tools", args.verb)
+            return
 
         if args.command == "host":
             resolved = _resolve_host_target(args.service)
             _dispatch_target_action(config, resolved, args.verb)
+            return
 
         if args.command == "runtime":
             from .commands.runtime import handle_runtime
 
-            environment = args.environment
-            verb = args.verb
-            if environment in {"start", "stop", "restart"} and verb in RUNTIME_TARGETS:
-                environment, verb = verb, environment
-            resolved = _resolve_runtime_target(environment)
-            if verb in {"start", "stop", "restart"}:
-                _emit_and_exit(handle_runtime(config, resolved, verb))
-            if verb not in RUNTIME_VERBS:
-                raise MoltboxCliError(
-                    error_type="unsupported_command",
-                    error_message=f"unsupported verb '{verb}'",
-                    recovery_message="run `moltbox --help` to see available commands",
-                )
-            _dispatch_target_action(config, resolved, verb)
-
-        if args.command == "serve":
-            from .commands.serve import handle_serve
-
-            handle_serve(config)
+            resolved = _resolve_runtime_target(args.environment)
+            if args.verb in {"start", "stop", "restart"}:
+                _emit_and_exit(handle_runtime(config, resolved, args.verb))
+                return
+            _dispatch_target_action(config, resolved, args.verb)
             return
 
         raise MoltboxCliError(

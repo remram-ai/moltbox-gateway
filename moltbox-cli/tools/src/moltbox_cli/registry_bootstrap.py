@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import AppConfig
-from .jsonio import display_path, read_json_file
+from .jsonio import display_path, read_json_file, write_json_file
 from .layout import ensure_host_layout
 from .log_paths import service_log_dir, service_log_file
 from .models import TargetRecord
@@ -21,15 +21,15 @@ def _base_metadata(config: AppConfig, service_name: str, aliases: list[str] | No
         "aliases": aliases or [],
         "log_dir": display_path(log_dir),
         "primary_log": display_path(service_log_file(config, service_name)),
-        "mount_path": "/var/log/remram",
+        "mount_path": "/var/log/moltbox",
     }
 
 
-def _control_plane_target(config: AppConfig) -> TargetRecord:
+def _tools_target(config: AppConfig) -> TargetRecord:
     now = _iso_now()
     return TargetRecord(
-        id="control-plane",
-        target_class="control_plane",
+        id="tools",
+        target_class="tools",
         display_name="MoltBox Tools",
         asset_path="tools",
         compose_project="moltbox-control-plane",
@@ -38,12 +38,12 @@ def _control_plane_target(config: AppConfig) -> TargetRecord:
         validator_key="container_baseline",
         log_source="docker_logs",
         runtime_root=str(config.layout.control_plane_dir),
-        service_name="control-plane",
+        service_name="tools",
         container_name="control-plane",
         created_at=now,
         updated_at=now,
         metadata={
-            **_base_metadata(config, "control-plane", aliases=["cli", "control", "tools"]),
+            **_base_metadata(config, "tools", aliases=["cli", "control", "control-plane"]),
             "hostname": "moltbox-cli",
         },
     )
@@ -51,7 +51,7 @@ def _control_plane_target(config: AppConfig) -> TargetRecord:
 
 def _runtime_target(config: AppConfig, target_id: str, display_name: str, hostname: str) -> TargetRecord:
     now = _iso_now()
-    runtime_root = Path.home() / ".openclaw" / target_id
+    runtime_root = config.layout.runtime_artifacts_root / "openclaw" / target_id
     service_name = f"openclaw-{target_id}"
     return TargetRecord(
         id=target_id,
@@ -70,7 +70,7 @@ def _runtime_target(config: AppConfig, target_id: str, display_name: str, hostna
         created_at=now,
         updated_at=now,
         metadata={
-            **_base_metadata(config, service_name, aliases=["prime"] if target_id == "prod" else []),
+            **_base_metadata(config, service_name),
             "hostname": hostname,
         },
     )
@@ -102,7 +102,7 @@ def _shared_service_target(config: AppConfig, target_id: str, display_name: str)
 
 def canonical_target_records(config: AppConfig) -> list[TargetRecord]:
     return [
-        _control_plane_target(config),
+        _tools_target(config),
         _shared_service_target(config, "ollama", "Ollama"),
         _shared_service_target(config, "opensearch", "OpenSearch"),
         _shared_service_target(config, "caddy", "Caddy"),
@@ -112,46 +112,91 @@ def canonical_target_records(config: AppConfig) -> list[TargetRecord]:
     ]
 
 
-def _migrate_legacy_control_record(config: AppConfig) -> None:
-    legacy_path = target_file_path(config.layout, "control")
-    canonical_path = target_file_path(config.layout, "control-plane")
-    if not legacy_path.exists() or canonical_path.exists():
-        return
-    legacy_payload = read_json_file(legacy_path, default={}) or {}
-    legacy_display_name = str(legacy_payload.get("display_name") or "Control Plane")
-    legacy_runtime_root = legacy_payload.get("runtime_root")
-    legacy_created_at = str(legacy_payload.get("created_at") or _iso_now())
-    legacy_metadata = legacy_payload.get("metadata") if isinstance(legacy_payload.get("metadata"), dict) else {}
-    migrated = TargetRecord(
-        id="control-plane",
-        target_class="control_plane",
-        display_name=legacy_display_name,
-        asset_path="control-plane",
-        compose_project="moltbox-control-plane",
-        container_names=["control-plane"],
-        snapshot_scope="target",
-        validator_key="container_baseline",
-        log_source="docker_logs",
-        runtime_root=str(legacy_runtime_root or config.layout.control_plane_dir),
-        service_name="control-plane",
-        container_name="control-plane",
-        created_at=legacy_created_at,
-        updated_at=_iso_now(),
-        metadata={**legacy_metadata, "aliases": ["cli", "control"], "hostname": "moltbox-cli"},
+def _read_target_payload(path: Path) -> dict[str, object] | None:
+    try:
+        payload = read_json_file(path, default=None)
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _migrate_legacy_tools_record(config: AppConfig) -> None:
+    tools_path = target_file_path(config.layout, "tools")
+    legacy_paths = [
+        target_file_path(config.layout, "control"),
+        target_file_path(config.layout, "control-plane"),
+    ]
+    if not tools_path.exists():
+        for legacy_path in legacy_paths:
+            if not legacy_path.exists():
+                continue
+            legacy_payload = _read_target_payload(legacy_path)
+            if legacy_payload is not None:
+                write_json_file(tools_path, legacy_payload)
+                break
+    for legacy_path in legacy_paths:
+        legacy_path.unlink(missing_ok=True)
+
+
+def _merge_aliases(canonical_id: str, canonical_aliases: list[str]) -> list[str]:
+    merged: list[str] = []
+    for alias in canonical_aliases:
+        alias_text = str(alias).strip()
+        if not alias_text or alias_text == canonical_id or alias_text in merged:
+            continue
+        merged.append(alias_text)
+    return merged
+
+
+def _reconcile_target_record(canonical: TargetRecord, existing_payload: dict[str, object] | None) -> TargetRecord:
+    existing_payload = existing_payload or {}
+    existing_metadata = existing_payload.get("metadata") if isinstance(existing_payload.get("metadata"), dict) else {}
+    metadata = dict(existing_metadata)
+    metadata.update({key: value for key, value in canonical.metadata.items() if key != "aliases"})
+    metadata["aliases"] = _merge_aliases(
+        canonical.id,
+        [str(item) for item in canonical.metadata.get("aliases", [])],
     )
-    write_target_record(canonical_path, migrated)
-    legacy_path.unlink(missing_ok=True)
+
+    created_at = str(existing_payload.get("created_at") or canonical.created_at)
+    updated_at = str(existing_payload.get("updated_at") or canonical.updated_at)
+    if existing_payload:
+        desired_payload = canonical.as_dict()
+        desired_payload["created_at"] = created_at
+        desired_payload["updated_at"] = updated_at
+        desired_payload["metadata"] = metadata
+        if desired_payload != existing_payload:
+            updated_at = _iso_now()
+
+    return TargetRecord(
+        id=canonical.id,
+        target_class=canonical.target_class,
+        display_name=canonical.display_name,
+        asset_path=canonical.asset_path,
+        compose_project=canonical.compose_project,
+        container_names=canonical.container_names,
+        snapshot_scope=canonical.snapshot_scope,
+        validator_key=canonical.validator_key,
+        log_source=canonical.log_source,
+        profile=canonical.profile,
+        runtime_root=canonical.runtime_root,
+        service_name=canonical.service_name,
+        container_name=canonical.container_name,
+        created_at=created_at,
+        updated_at=updated_at,
+        metadata=metadata,
+    )
 
 
 def ensure_registry_bootstrap(config: AppConfig) -> list[TargetRecord]:
     ensure_host_layout(config.layout)
-    _migrate_legacy_control_record(config)
+    _migrate_legacy_tools_record(config)
     records: list[TargetRecord] = []
     for canonical in canonical_target_records(config):
         path = target_file_path(config.layout, canonical.id)
-        if path.exists():
-            records.append(load_target_record(path))
-            continue
-        write_target_record(path, canonical)
-        records.append(canonical)
+        existing_payload = _read_target_payload(path) if path.exists() else None
+        reconciled = _reconcile_target_record(canonical, existing_payload)
+        if existing_payload != reconciled.as_dict():
+            write_target_record(path, reconciled)
+        records.append(load_target_record(path))
     return records

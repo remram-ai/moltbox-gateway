@@ -21,6 +21,12 @@ def asset_path_for_target(asset_path: str) -> Path:
     return deployment_assets_root() / asset_path
 
 
+def config_path_for_target(target_class: str) -> Path | None:
+    if target_class != "runtime":
+        return None
+    return build_repo_layout().config_dir / "openclaw"
+
+
 def rendered_output_dir(config: AppConfig, target: str, profile: str | None) -> Path:
     bucket = profile if profile else "shared"
     return config.layout.deploy_dir / "rendered" / bucket / target
@@ -31,7 +37,7 @@ def render_context(config: AppConfig, target: str) -> dict[str, str]:
     runtime_root = record.runtime_root or ""
     shared_root = str(config.layout.shared_dir / target) if record.target_class == "shared_service" else ""
     gateway_port = {
-        "control-plane": "7474",
+        "tools": "7474",
         "dev": "18789",
         "test": "28789",
         "prod": "38789",
@@ -68,6 +74,15 @@ def _render_file(source: Path, destination: Path, context: dict[str, str]) -> No
     destination.write_bytes(source.read_bytes())
 
 
+def _render_tree(source_root: Path, output_root: Path, context: dict[str, str]) -> list[str]:
+    source_paths: list[str] = []
+    for source in sorted(path for path in source_root.rglob("*") if path.is_file()):
+        relative = source.relative_to(source_root)
+        _render_file(source, output_root / relative, context)
+        source_paths.append(str(source))
+    return source_paths
+
+
 def render_target(config: AppConfig, target: str, profile: str | None = None) -> dict[str, Any]:
     record = get_target(config, target)
     render_profile = profile or record.profile
@@ -86,6 +101,14 @@ def render_target(config: AppConfig, target: str, profile: str | None = None) ->
             target=record.id,
             asset_path=str(asset_dir),
         )
+    config_dir = config_path_for_target(record.target_class)
+    if record.target_class == "runtime" and (config_dir is None or not config_dir.exists()):
+        raise ValidationError(
+            f"deployment config for target '{record.id}' was not found",
+            "create the canonical runtime config directory under `moltbox/config/` and rerun the command",
+            target=record.id,
+            config_path=str(config_dir) if config_dir is not None else "",
+        )
     output_dir = rendered_output_dir(config, record.id, render_profile)
     if output_dir.exists():
         for child in sorted(output_dir.rglob("*"), reverse=True):
@@ -95,12 +118,13 @@ def render_target(config: AppConfig, target: str, profile: str | None = None) ->
                 child.rmdir()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    source_paths: list[str] = []
     context = render_context(config, record.id)
-    for source in sorted([path for path in asset_dir.rglob("*") if path.is_file()]):
-        relative = source.relative_to(asset_dir)
-        _render_file(source, output_dir / relative, context)
-        source_paths.append(str(source))
+    source_paths = _render_tree(asset_dir, output_dir, context)
+    config_source_paths: list[str] = []
+    rendered_config_dir: Path | None = None
+    if config_dir is not None:
+        rendered_config_dir = output_dir / "config" / config_dir.name
+        config_source_paths = _render_tree(config_dir, rendered_config_dir, context)
 
     manifest = {
         "target": record.id,
@@ -109,12 +133,17 @@ def render_target(config: AppConfig, target: str, profile: str | None = None) ->
         "render_version": resolve_version_info().version,
         "render_outcome": "success",
         "source_asset_paths": source_paths,
+        "source_config_paths": config_source_paths,
     }
     write_json_file(output_dir / "render-manifest.json", manifest)
-    return {
+    payload = {
         "target": record.id,
         "profile": render_profile,
         "output_dir": str(output_dir),
         "render_manifest_path": str(output_dir / "render-manifest.json"),
         "asset_path": str(asset_dir),
     }
+    if config_dir is not None and rendered_config_dir is not None:
+        payload["config_path"] = str(config_dir)
+        payload["rendered_config_dir"] = str(rendered_config_dir)
+    return payload

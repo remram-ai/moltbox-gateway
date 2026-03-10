@@ -6,7 +6,7 @@ from .config import AppConfig
 
 
 PRIMARY_LOG_FILES = {
-    "control-plane": "serve.log",
+    "tools": "serve.log",
     "openclaw-dev": "openclaw.log",
     "openclaw-test": "openclaw.log",
     "openclaw-prod": "openclaw.log",
@@ -25,8 +25,8 @@ def service_log_file(config: AppConfig, service_name: str) -> Path:
 
 
 def target_log_service_name(target_id: str) -> str:
-    if target_id == "control-plane":
-        return "control-plane"
+    if target_id == "tools":
+        return "tools"
     if target_id in {"dev", "test", "prod"}:
         return f"openclaw-{target_id}"
     return target_id

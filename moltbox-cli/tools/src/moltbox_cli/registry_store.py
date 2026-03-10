@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .errors import ValidationError
-from .jsonio import read_json_file, write_json_file
+from .jsonio import display_path, read_json_file, write_json_file
 from .models import TargetRecord
 
 
@@ -33,13 +33,13 @@ def load_target_record(path: Path) -> TargetRecord:
     except ValueError as exc:
         raise ValidationError(
             "target registry corrupted",
-            "delete ~/.remram/state/targets and rerun `moltbox tools health` to regenerate defaults",
+            f"delete the target registry at {display_path(path.parent)} and rerun `moltbox tools health`",
             path=str(path),
         ) from exc
     if not isinstance(payload, dict) or not REQUIRED_FIELDS.issubset(payload):
         raise ValidationError(
             "target registry corrupted",
-            "delete ~/.remram/state/targets and rerun `moltbox tools health` to regenerate defaults",
+            f"delete the target registry at {display_path(path.parent)} and rerun `moltbox tools health`",
             path=str(path),
         )
     return TargetRecord(

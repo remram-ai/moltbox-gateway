@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "src"))
+CLI_ROOT = Path(__file__).resolve().parents[2]
+SRC_DIR = CLI_ROOT / "tools" / "src"
+
+
+sys.path.insert(0, str(SRC_DIR))
 
 from moltbox_cli.config import resolve_config
+from moltbox_cli.deployment_service import render_assets
 from moltbox_cli.deployment_service import runtime_lifecycle
+from moltbox_cli.jsonio import read_json_file
+from moltbox_cli.jsonio import write_json_file
+from moltbox_cli.registry import get_target
 
 
 class Args:
@@ -19,9 +30,51 @@ class Args:
     cli_path = None
 
 
+def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    merged_env = os.environ.copy()
+    merged_env["PYTHONPATH"] = str(SRC_DIR) + os.pathsep + merged_env.get("PYTHONPATH", "")
+    if env:
+        merged_env.update(env)
+    return subprocess.run(
+        [sys.executable, "-m", "moltbox_cli", *args],
+        cwd=str(CLI_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=merged_env,
+    )
+
+
+def test_runtime_render_uses_runtime_container_assets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    config = resolve_config(Args())
+    payload = render_assets(config, "dev")
+    assert payload["ok"] is True
+    assert payload["command"] == "moltbox runtime dev deploy"
+    rendered = payload["render"]
+    asset_path = rendered["asset_path"].replace("/", "\\")
+    config_path = rendered["config_path"].replace("/", "\\")
+    assert "moltbox\\containers\\runtimes\\openclaw" in asset_path
+    assert "moltbox\\config\\openclaw" in config_path
+    assert Path(rendered["output_dir"]) == config.layout.deploy_dir / "rendered" / "dev" / "dev"
+    assert Path(rendered["rendered_config_dir"]) == Path(rendered["output_dir"]) / "config" / "openclaw"
+    manifest = read_json_file(Path(rendered["render_manifest_path"]))
+    source_paths = [path.replace("/", "\\") for path in manifest["source_asset_paths"]]
+    config_source_paths = [path.replace("/", "\\") for path in manifest["source_config_paths"]]
+    assert source_paths
+    assert config_source_paths
+    assert all("moltbox\\containers\\runtimes\\openclaw" in path for path in source_paths)
+    assert all("moltbox\\config\\openclaw" in path for path in config_source_paths)
+    compose_text = (Path(rendered["output_dir"]) / "compose.yml").read_text(encoding="utf-8")
+    assert "./config/openclaw:/app/config/openclaw:ro" in compose_text
+    target = get_target(config, "dev")
+    assert Path(target.runtime_root) == config.layout.runtime_artifacts_root / "openclaw" / "dev"
+
+
 def test_runtime_lifecycle_reports_new_cli_command(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("REMRAM_STATE_ROOT", str(tmp_path / ".remram"))
-    monkeypatch.setenv("REMRAM_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
     config = resolve_config(Args())
 
     def fake_run_primitive(config_arg, name: str, payload: dict[str, object]) -> dict[str, object]:
@@ -40,3 +93,54 @@ def test_runtime_lifecycle_reports_new_cli_command(tmp_path: Path, monkeypatch) 
     payload = runtime_lifecycle(config, "dev", "restart")
     assert payload["command"] == "moltbox runtime dev restart"
     assert payload["ok"] is True
+
+
+def test_runtime_cli_repairs_unrelated_corrupt_host_registry(tmp_path: Path) -> None:
+    state_root = tmp_path / ".remram"
+    runtime_root = tmp_path / "Moltbox"
+    targets_dir = state_root / "state" / "targets"
+    targets_dir.mkdir(parents=True, exist_ok=True)
+    write_json_file(
+        targets_dir / "ollama.json",
+        {
+            "id": "ollama",
+            "target_class": "shared_service",
+            "display_name": "Ollama",
+            "created_at": "2026-03-10T00:00:00+00:00",
+            "updated_at": "2026-03-10T00:00:00+00:00",
+            "metadata": {},
+            "service_name": "ollama",
+            "container_name": "ollama",
+        },
+    )
+
+    completed = run_cli(
+        "runtime",
+        "dev",
+        "status",
+        env={
+            "MOLTBOX_STATE_ROOT": str(state_root),
+            "MOLTBOX_RUNTIME_ROOT": str(runtime_root),
+        },
+    )
+
+    assert completed.returncode == 0
+    payload = json.loads(completed.stdout)
+    assert payload["requested_target"] == "dev"
+    repaired = read_json_file(targets_dir / "ollama.json")
+    assert repaired["asset_path"] == "shared-services/ollama"
+
+
+def test_runtime_cli_rejects_reversed_runtime_grammar(tmp_path: Path) -> None:
+    completed = run_cli(
+        "runtime",
+        "start",
+        "dev",
+        env={
+            "MOLTBOX_STATE_ROOT": str(tmp_path / ".remram"),
+            "MOLTBOX_RUNTIME_ROOT": str(tmp_path / "Moltbox"),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "invalid choice" in completed.stderr
