@@ -18,41 +18,42 @@ from .versioning import resolve_version_info
 
 def create_http_app(config: AppConfig, logger: logging.Logger) -> FastAPI:
     version = resolve_version_info().version
-    mcp = create_mcp_server(config)
+    mcp_app = create_mcp_server(config).streamable_http_app()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         started_at = datetime.now(tz=UTC).isoformat()
-        write_runtime_state(
-            config.layout.runtime_state_file,
-            {
-                "serve_state": "ready",
-                "status": "ready",
-                "started_at": started_at,
-                "host": config.internal_host,
-                "port": config.internal_port,
-                "pid": os.getpid(),
-                "version": version,
-            },
-        )
-        log_event(logger, logging.INFO, "ready", "control-plane", "control-plane service is ready")
-        try:
-            yield
-        finally:
+        async with mcp_app.router.lifespan_context(mcp_app):
             write_runtime_state(
                 config.layout.runtime_state_file,
                 {
-                    "serve_state": "stopped",
-                    "status": "stopped",
+                    "serve_state": "ready",
+                    "status": "ready",
                     "started_at": started_at,
-                    "stopped_at": datetime.now(tz=UTC).isoformat(),
                     "host": config.internal_host,
                     "port": config.internal_port,
+                    "pid": os.getpid(),
                     "version": version,
                 },
             )
-            clear_pid(config.layout.pid_file)
-            log_event(logger, logging.INFO, "shutdown", "control-plane", "control-plane service stopped")
+            log_event(logger, logging.INFO, "ready", "control-plane", "control-plane service is ready")
+            try:
+                yield
+            finally:
+                write_runtime_state(
+                    config.layout.runtime_state_file,
+                    {
+                        "serve_state": "stopped",
+                        "status": "stopped",
+                        "started_at": started_at,
+                        "stopped_at": datetime.now(tz=UTC).isoformat(),
+                        "host": config.internal_host,
+                        "port": config.internal_port,
+                        "version": version,
+                    },
+                )
+                clear_pid(config.layout.pid_file)
+                log_event(logger, logging.INFO, "shutdown", "control-plane", "control-plane service stopped")
 
     app = FastAPI(title="Remram Control Plane", lifespan=lifespan)
 
@@ -60,5 +61,5 @@ def create_http_app(config: AppConfig, logger: logging.Logger) -> FastAPI:
     async def health() -> dict:
         return build_local_health_payload(config, version)
 
-    app.router.routes.append(Mount("/mcp", app=mcp.streamable_http_app()))
+    app.router.routes.append(Mount("/mcp", app=mcp_app))
     return app
