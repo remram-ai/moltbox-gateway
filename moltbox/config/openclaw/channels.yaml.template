@@ -1,0 +1,28 @@
+# Interaction channel policy for Moltbox.
+
+channels:
+  web:
+    enabled: true
+    auth_required: true
+    privilege_level: standard
+
+  discord:
+    # Enable per runtime after provisioning DISCORD_BOT_TOKEN and guild/channel allowlists.
+    enabled: {{ discord_enabled }}
+    dmPolicy: pairing
+    groupPolicy: allowlist
+    configWrites: false
+    allowBots: false
+    slashCommand:
+      ephemeral: true
+    dm:
+      enabled: true
+      groupEnabled: false
+{{ discord_guilds_block }}
+
+group_sessions:
+  require_resolvable_speaker_identity: true
+  reject_unresolved_speaker_messages: true
+
+privilege_policy:
+  channel_selection_does_not_grant_elevation: true

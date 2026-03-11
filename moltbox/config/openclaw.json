@@ -6,6 +6,9 @@
       "dangerouslyAllowHostHeaderOriginFallback": true
     }
   },
+  "diagnostics": {
+    "enabled": true
+  },
   "agents": {
     "defaults": {
       "model": {

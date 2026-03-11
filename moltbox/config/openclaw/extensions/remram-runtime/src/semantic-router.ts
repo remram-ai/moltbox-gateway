@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/core";
+import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 
 type PluginConfig = {
   semanticRouterConfigPath: string;
@@ -120,6 +121,7 @@ const turnsByRootSessionId = new Map<string, RouterTurnState>();
 const turnsByTurnId = new Map<string, RouterTurnState>();
 const activeRootBySessionKey = new Map<string, string>();
 const TURN_MARKER_PREFIX = "Remram Semantic Router Turn ID:";
+let pluginApiForTelemetry: OpenClawPluginApi | null = null;
 
 async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   try {
@@ -1320,11 +1322,13 @@ function recordStageTelemetry(
   },
 ): void {
   const timestamp = nowIso();
-  turn.telemetry.push({
+  const provider = payload.provider ?? stage.provider;
+  const model = payload.model ?? stage.model;
+  const stageTelemetry: StageTelemetry = {
     runId: payload.runId,
     stage: stage.id,
-    provider: payload.provider ?? stage.provider,
-    model: payload.model ?? stage.model,
+    provider,
+    model,
     decision: payload.decision,
     reason: payload.reason,
     durationMs: payload.durationMs,
@@ -1332,12 +1336,13 @@ function recordStageTelemetry(
     tokensOut: payload.tokensOut,
     timestamp,
     rawContent: payload.rawContent,
-  });
+  };
+  turn.telemetry.push(stageTelemetry);
   appendLedgerEntry(turn.packet, {
     stage: stage.id,
     kind: "semantic_stage",
-    provider: payload.provider ?? stage.provider,
-    model: payload.model ?? stage.model,
+    provider,
+    model,
     decision: payload.decision,
     reason: payload.reason,
     duration_ms: payload.durationMs,
@@ -1346,6 +1351,46 @@ function recordStageTelemetry(
     timestamp,
     error: payload.error,
   });
+  emitDiagnosticEvent({
+    type: "model.usage",
+    sessionKey: turn.rootSessionKey,
+    sessionId: turn.rootSessionId,
+    provider,
+    model,
+    usage: {
+      input: payload.tokensIn,
+      output: payload.tokensOut,
+      total: payload.tokensIn + payload.tokensOut,
+    },
+    lastCallUsage: {
+      input: payload.tokensIn,
+      output: payload.tokensOut,
+      total: payload.tokensIn + payload.tokensOut,
+    },
+    context: {
+      used: payload.tokensIn + payload.tokensOut,
+    },
+    durationMs: payload.durationMs,
+  });
+  pluginApiForTelemetry?.logger.info(
+    `semantic_router.stage ${JSON.stringify({
+      event: "semantic_router.stage",
+      turnId: turn.turnId,
+      rootSessionId: turn.rootSessionId,
+      rootSessionKey: turn.rootSessionKey ?? null,
+      runId: payload.runId ?? null,
+      stage: stage.id,
+      provider,
+      model,
+      decision: payload.decision,
+      reason: payload.reason,
+      durationMs: payload.durationMs,
+      tokensIn: payload.tokensIn,
+      tokensOut: payload.tokensOut,
+      hadError: Boolean(payload.error),
+      error: payload.error ?? null,
+    })}`,
+  );
   updatePacketTelemetry(turn);
 }
 
@@ -1855,6 +1900,7 @@ async function writeDebugArtifact(api: OpenClawPluginApi, turn: RouterTurnState,
 }
 
 export function createSemanticRouterPlugin(api: OpenClawPluginApi) {
+  pluginApiForTelemetry = api;
   api.registerHttpRoute({
     path: "/plugins/remram-runtime/router/v1/chat/completions",
     auth: "plugin",
@@ -2067,6 +2113,24 @@ export function createSemanticRouterPlugin(api: OpenClawPluginApi) {
     telemetry.total_duration_ms = Number(event.durationMs ?? telemetry.total_duration_ms ?? 0);
     response.telemetry = telemetry;
     turn.packet.response = response;
+    api.logger.info(
+      `semantic_router.turn ${JSON.stringify({
+        event: "semantic_router.turn",
+        turnId: turn.turnId,
+        rootSessionId: turn.rootSessionId,
+        rootSessionKey: turn.rootSessionKey ?? null,
+        finalStatus: turn.finalResponse?.status ?? "unknown",
+        finalReason: turn.finalResponse?.reason ?? null,
+        answeringStage: telemetry.answering_stage ?? null,
+        answeringProvider: telemetry.answering_provider ?? null,
+        answeringModel: telemetry.answering_model ?? null,
+        totalDurationMs: Number(telemetry.total_duration_ms ?? 0),
+        totalTokensIn: Number(telemetry.total_tokens_in ?? 0),
+        totalTokensOut: Number(telemetry.total_tokens_out ?? 0),
+        stageCount: Array.isArray(telemetry.stages) ? telemetry.stages.length : 0,
+        escalationPath: Array.isArray(telemetry.escalation_path) ? telemetry.escalation_path : [],
+      })}`,
+    );
     await writeDebugArtifact(api, turn, Number(event.durationMs ?? 0));
 
     for (const ownedSessionId of turn.stageSessionIds) {

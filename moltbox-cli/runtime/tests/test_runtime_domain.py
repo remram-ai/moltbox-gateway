@@ -77,7 +77,16 @@ def test_runtime_render_uses_runtime_container_assets(tmp_path: Path, monkeypatc
     runtime_root_dir = Path(rendered["rendered_runtime_root_dir"])
     assert (runtime_root_dir / "openclaw.json").exists()
     assert (runtime_root_dir / "agents.yaml").exists()
+    channels_text = (runtime_root_dir / "channels.yaml").read_text(encoding="utf-8")
+    agents_text = (runtime_root_dir / "agents.yaml").read_text(encoding="utf-8")
+    assert "discord:" in channels_text
+    assert "signal:" not in channels_text
+    assert "enabled: false" in channels_text
+    assert "- discord" in agents_text
+    assert "- signal" not in agents_text
     assert (runtime_root_dir / "routing.yaml").exists()
+    assert (runtime_root_dir / "semantic-router.yaml").exists()
+    assert (Path(rendered["output_dir"]) / "config" / "openclaw" / "extensions" / "remram-runtime" / "index.ts").exists()
     target = get_target(config, "dev")
     assert Path(target.runtime_root) == config.layout.runtime_artifacts_root / "openclaw" / "dev"
 
@@ -103,6 +112,25 @@ def test_runtime_root_config_seeds_allowed_origins(tmp_path: Path, monkeypatch) 
     assert "http://192.168.1.189:28789" in allowed_origins
     assert "http://moltbox-prime:28789" in allowed_origins
     assert "https://console.example" in allowed_origins
+
+
+def test_runtime_render_can_enable_discord_for_one_environment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_DISCORD_ENABLED_DEV", "true")
+    monkeypatch.setenv("MOLTBOX_DISCORD_GUILD_ID_DEV", "1481179628323340393")
+    monkeypatch.setenv("MOLTBOX_DISCORD_CHANNEL_ID_DEV", "1481180067580219402")
+
+    config = resolve_config(Args())
+    payload = render_assets(config, "dev")
+
+    assert payload["ok"] is True
+    channels_text = (
+        Path(payload["render"]["rendered_runtime_root_dir"]) / "channels.yaml"
+    ).read_text(encoding="utf-8")
+    assert "enabled: true" in channels_text
+    assert '"1481179628323340393"' in channels_text
+    assert '"1481180067580219402"' in channels_text
 
 
 def test_runtime_root_config_preserves_live_gateway_auth_and_origins(tmp_path: Path, monkeypatch) -> None:
@@ -173,13 +201,17 @@ def test_runtime_chat_reports_new_cli_command(tmp_path: Path, monkeypatch) -> No
         if name == "runtime_chat":
             assert payload["message"] == "hello from test"
             assert payload["timeout_seconds"] == 45
+            assert str(payload["runtime_root"]).endswith("openclaw\\dev")
             return {
                 "ok": True,
                 "stdout": '{"reply":"pong"}',
                 "stderr": "",
                 "details": {
                     "container_name": "openclaw-test",
+                    "session_id": "runtime-chat-smoke",
                     "cli_output": {"reply": "pong"},
+                    "telemetry": {"answering_model": "ollama/qwen3:8b"},
+                    "semantic_router": {"packet": {"response": {"status": "answer", "answer": "pong"}}},
                 },
             }
         if name == "tail_target_logs":
@@ -191,6 +223,7 @@ def test_runtime_chat_reports_new_cli_command(tmp_path: Path, monkeypatch) -> No
     assert payload["command"] == "moltbox runtime dev chat"
     assert payload["ok"] is True
     assert payload["chat"]["cli_output"] == {"reply": "pong"}
+    assert payload["chat"]["telemetry"]["answering_model"] == "ollama/qwen3:8b"
 
 
 def test_runtime_cli_repairs_unrelated_corrupt_host_registry(tmp_path: Path) -> None:
@@ -242,7 +275,6 @@ def test_runtime_cli_rejects_reversed_runtime_grammar(tmp_path: Path) -> None:
 
     assert completed.returncode != 0
     assert "invalid choice" in completed.stderr
-
 
 
 def test_runtime_cli_chat_requires_message(tmp_path: Path) -> None:

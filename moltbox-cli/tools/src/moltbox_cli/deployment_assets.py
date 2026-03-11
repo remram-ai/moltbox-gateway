@@ -85,6 +85,56 @@ def _docker_socket_gid(default_gid: str) -> str:
         return default_gid
 
 
+def _target_env_value(target: str, base_name: str) -> str:
+    for candidate in (f"{base_name}_{target.upper()}", base_name):
+        raw = os.environ.get(candidate)
+        if raw:
+            trimmed = raw.strip()
+            if trimmed:
+                return trimmed
+    return ""
+
+
+def _env_bool(target: str, base_name: str, default: bool = False) -> str:
+    raw = _target_env_value(target, base_name)
+    if not raw:
+        return "true" if default else "false"
+    return "true" if raw.lower() in {"1", "true", "yes", "on"} else "false"
+
+
+def _comma_split(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _discord_guilds_block(target: str) -> str:
+    guild_id = _target_env_value(target, "MOLTBOX_DISCORD_GUILD_ID")
+    if not guild_id:
+        return ""
+
+    require_mention = _env_bool(target, "MOLTBOX_DISCORD_REQUIRE_MENTION", default=True)
+    user_ids = _comma_split(_target_env_value(target, "MOLTBOX_DISCORD_USER_IDS"))
+    channel_ids = _comma_split(_target_env_value(target, "MOLTBOX_DISCORD_CHANNEL_IDS"))
+    single_channel_id = _target_env_value(target, "MOLTBOX_DISCORD_CHANNEL_ID")
+    if single_channel_id and single_channel_id not in channel_ids:
+        channel_ids.append(single_channel_id)
+
+    lines = [
+        "    guilds:",
+        f'      "{guild_id}":',
+        f"        requireMention: {require_mention}",
+    ]
+    if user_ids:
+        lines.append("        users:")
+        for user_id in user_ids:
+            lines.append(f'          - "{user_id}"')
+    if channel_ids:
+        lines.append("        channels:")
+        for channel_id in channel_ids:
+            lines.append(f'          "{channel_id}":')
+            lines.append(f"            requireMention: {require_mention}")
+    return "\n".join(lines)
+
+
 def render_context(config: AppConfig, target: str) -> dict[str, str]:
     record = get_target(config, target)
     repo_root = build_repo_layout().repo_root
@@ -119,6 +169,8 @@ def render_context(config: AppConfig, target: str) -> dict[str, str]:
         "container_uid": container_uid,
         "container_gid": container_gid,
         "docker_socket_gid": _docker_socket_gid(container_gid),
+        "discord_enabled": _env_bool(record.id, "MOLTBOX_DISCORD_ENABLED", default=False),
+        "discord_guilds_block": _discord_guilds_block(record.id),
     }
 
 

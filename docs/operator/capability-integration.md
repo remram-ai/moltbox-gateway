@@ -57,8 +57,8 @@ Gateway capability integrations use these canonical locations:
 Examples:
 
 ```text
-~/Moltbox/logs/signal/
-~/.remram/shared/signal/
+~/Moltbox/logs/discord/
+~/.remram/shared/discord/
 ```
 
 For edge and appliance concerns, prefer MoltBox-scoped naming. The current `~/.remram` state root is existing implementation state, not a reason to invent new `remram-*` edge namespaces.
@@ -80,7 +80,7 @@ docs/operator/<capability>.md
 Examples:
 
 ```text
-docs/operator/signal.md
+docs/operator/discord.md
 docs/operator/ollama.md
 docs/operator/opensearch.md
 ```
@@ -134,7 +134,7 @@ ${MOLTBOX_RUNTIME_ROOT}/logs/<capability>/
 Default example:
 
 ```text
-~/Moltbox/logs/signal/
+~/Moltbox/logs/discord/
 ```
 
 Container posture:
@@ -161,7 +161,7 @@ ${MOLTBOX_STATE_ROOT}/shared/<capability>/
 Default example:
 
 ```text
-~/.remram/shared/signal/
+~/.remram/shared/discord/
 ```
 
 Environment-owned runtime state may also live under the environment runtime root when that is the correct ownership boundary, for example under `${MOLTBOX_RUNTIME_ROOT}/openclaw/<environment>/`.
