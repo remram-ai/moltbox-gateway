@@ -15,6 +15,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from moltbox_cli.config import resolve_config
 from moltbox_cli.deployment_service import render_assets
+from moltbox_cli.deployment_service import runtime_chat
 from moltbox_cli.deployment_service import runtime_lifecycle
 from moltbox_cli.jsonio import read_json_file
 from moltbox_cli.jsonio import write_json_file
@@ -163,6 +164,35 @@ def test_runtime_lifecycle_reports_new_cli_command(tmp_path: Path, monkeypatch) 
     assert payload["ok"] is True
 
 
+def test_runtime_chat_reports_new_cli_command(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    config = resolve_config(Args())
+
+    def fake_run_primitive(config_arg, name: str, payload: dict[str, object]) -> dict[str, object]:
+        if name == "runtime_chat":
+            assert payload["message"] == "hello from test"
+            assert payload["timeout_seconds"] == 45
+            return {
+                "ok": True,
+                "stdout": '{"reply":"pong"}',
+                "stderr": "",
+                "details": {
+                    "container_name": "openclaw-test",
+                    "cli_output": {"reply": "pong"},
+                },
+            }
+        if name == "tail_target_logs":
+            return {"ok": True, "details": {"log_tail": "ready"}}
+        raise AssertionError(name)
+
+    monkeypatch.setattr("moltbox_cli.deployment_service.run_primitive", fake_run_primitive)
+    payload = runtime_chat(config, "dev", "hello from test", 45)
+    assert payload["command"] == "moltbox runtime dev chat"
+    assert payload["ok"] is True
+    assert payload["chat"]["cli_output"] == {"reply": "pong"}
+
+
 def test_runtime_cli_repairs_unrelated_corrupt_host_registry(tmp_path: Path) -> None:
     state_root = tmp_path / ".remram"
     runtime_root = tmp_path / "Moltbox"
@@ -212,3 +242,21 @@ def test_runtime_cli_rejects_reversed_runtime_grammar(tmp_path: Path) -> None:
 
     assert completed.returncode != 0
     assert "invalid choice" in completed.stderr
+
+
+
+def test_runtime_cli_chat_requires_message(tmp_path: Path) -> None:
+    completed = run_cli(
+        "runtime",
+        "dev",
+        "chat",
+        env={
+            "MOLTBOX_STATE_ROOT": str(tmp_path / ".remram"),
+            "MOLTBOX_RUNTIME_ROOT": str(tmp_path / "Moltbox"),
+        },
+    )
+
+    assert completed.returncode != 0
+    payload = json.loads(completed.stdout)
+    assert payload["error_type"] == "validation_failure"
+    assert "requires a prompt" in payload["error_message"]

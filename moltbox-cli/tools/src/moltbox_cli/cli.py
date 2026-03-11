@@ -8,7 +8,7 @@ from .jsonio import emit_json
 from .target_resolution import HOST_TARGETS, RUNTIME_TARGETS, resolve_target_identifier
 
 
-RUNTIME_VERBS = {"deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart"}
+RUNTIME_VERBS = {"deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart", "chat"}
 HOST_VERBS = {"deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart"}
 TOOLS_VERBS = {"version", "health", "serve", "status", "inspect", "update", "rollback", "logs"}
 
@@ -81,6 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     runtime = subparsers.add_parser("runtime", help="Operate OpenClaw runtime environments.")
     runtime.add_argument("environment", choices=sorted(RUNTIME_TARGETS), help="Runtime environment.")
     runtime.add_argument("verb", choices=sorted(RUNTIME_VERBS), help="Runtime verb.")
+    runtime.add_argument("--message", help="Single-turn runtime chat prompt.")
+    runtime.add_argument("--timeout-seconds", type=int, default=30, help="Runtime chat timeout in seconds.")
     return parser
 
 
@@ -120,9 +122,12 @@ def main() -> None:
             return
 
         if args.command == "runtime":
-            from .commands.runtime import handle_runtime
+            from .commands.runtime import handle_runtime, handle_runtime_chat
 
             resolved = _resolve_runtime_target(args.environment)
+            if args.verb == "chat":
+                _emit_and_exit(handle_runtime_chat(config, resolved, args.message, args.timeout_seconds))
+                return
             if args.verb in {"start", "stop", "restart"}:
                 _emit_and_exit(handle_runtime(config, resolved, args.verb))
                 return

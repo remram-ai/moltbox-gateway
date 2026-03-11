@@ -5,6 +5,7 @@ mcp:
       - health
       - status
       - inspect
+      - update
   host:
     verbs:
       - status

@@ -127,6 +127,11 @@ def create_mcp_server(config: AppConfig) -> FastMCP:
         async def tools_inspect() -> dict:
             return dispatch_tools_action(config, "inspect")
 
+    if "update" in allowed_tools_verbs(policy):
+        @mcp.tool(description="Update the MoltBox tools target using the canonical deploy path.")
+        async def tools_update() -> dict:
+            return dispatch_tools_action(config, "update")
+
     if allowed_host_verbs(policy):
         @mcp.tool(description="Execute an allowed host action for a canonical shared-service target.")
         async def host_action(service: str, verb: str) -> dict:

@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from moltbox_cli.config import resolve_config
 from moltbox_cli.mcp_adapter import dispatch_host_action, dispatch_runtime_action, dispatch_tools_action
-from moltbox_cli.mcp_policy import allowed_runtime_verbs, load_mcp_policy
+from moltbox_cli.mcp_policy import allowed_runtime_verbs, allowed_tools_verbs, load_mcp_policy
 
 
 class Args:
@@ -30,6 +30,7 @@ def test_runtime_policy_defaults_match_dev_test_prod_model(tmp_path: Path, monke
     assert {"deploy", "rollback", "restart"}.issubset(allowed_runtime_verbs(policy, "dev"))
     assert allowed_runtime_verbs(policy, "test") == {"deploy", "status", "logs", "inspect"}
     assert allowed_runtime_verbs(policy, "prod") == {"deploy", "inspect", "logs"}
+    assert "update" in allowed_tools_verbs(policy)
 
 
 def test_runtime_action_denies_prod_restart(monkeypatch, tmp_path: Path) -> None:
@@ -76,12 +77,17 @@ def test_host_action_allows_read_only_status(monkeypatch, tmp_path: Path) -> Non
     assert payload["args"] == ["host", "ssl", "status"]
 
 
-def test_tools_action_denies_update(monkeypatch, tmp_path: Path) -> None:
+def test_tools_action_allows_update(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
     monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
     config = resolve_config(Args())
 
+    monkeypatch.setattr(
+        "moltbox_cli.mcp_adapter.invoke_cli_json",
+        lambda config_arg, args: {"ok": True, "args": args},
+    )
+
     payload = dispatch_tools_action(config, "update")
 
-    assert payload["ok"] is False
-    assert payload["error_type"] == "mcp_policy_denied"
+    assert payload["ok"] is True
+    assert payload["args"] == ["tools", "update"]

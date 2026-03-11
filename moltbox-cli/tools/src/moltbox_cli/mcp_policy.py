@@ -11,7 +11,7 @@ from .layout import build_repo_layout
 
 DEFAULT_POLICY = {
     "mcp": {
-        "tools": {"verbs": ["version", "health", "status", "inspect"]},
+        "tools": {"verbs": ["version", "health", "status", "inspect", "update"]},
         "host": {"verbs": ["status", "inspect", "logs"]},
         "runtime": {
             "dev": {"verbs": ["deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart"]},

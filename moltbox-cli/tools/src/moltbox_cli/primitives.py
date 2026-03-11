@@ -44,6 +44,7 @@ PRIMITIVES: tuple[PrimitiveDefinition, ...] = (
     PrimitiveDefinition("start_runtime", "stack", "Start a runtime target.", "runtime/commands/stack/start-runtime.py", True),
     PrimitiveDefinition("stop_runtime", "stack", "Stop a runtime target.", "runtime/commands/stack/stop-runtime.py", True),
     PrimitiveDefinition("restart_runtime", "stack", "Restart a runtime target.", "runtime/commands/stack/restart-runtime.py", True),
+    PrimitiveDefinition("runtime_chat", "runtime", "Run a single-turn chat against a runtime target.", "runtime/commands/runtime/chat-runtime.py", False),
     PrimitiveDefinition("snapshot_target", "snapshot", "Create a target-scoped snapshot.", "host/commands/snapshot/snapshot-target.py", True),
     PrimitiveDefinition("restore_target_snapshot", "snapshot", "Restore a target-scoped snapshot.", "host/commands/snapshot/restore-target-snapshot.py", True),
     PrimitiveDefinition("validate_target", "validate", "Validate a target using the baseline container validator.", "host/commands/validate/validate-target.py", False),

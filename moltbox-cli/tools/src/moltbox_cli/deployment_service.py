@@ -419,6 +419,53 @@ def runtime_lifecycle(config: AppConfig, env: str, action: str) -> dict[str, Any
     }
 
 
+def runtime_chat(config: AppConfig, env: str, message: str | None, timeout_seconds: int = 30) -> dict[str, Any]:
+    if env not in {"dev", "test", "prod"}:
+        raise ValidationError(
+            f"unsupported runtime environment '{env}'",
+            "use one of dev, test, or prod and rerun the command",
+            environment=env,
+        )
+    if not isinstance(message, str) or not message.strip():
+        raise ValidationError(
+            "runtime chat requires a prompt",
+            "pass --message with a non-empty prompt and rerun the command",
+            environment=env,
+        )
+    if timeout_seconds <= 0:
+        raise ValidationError(
+            "runtime chat timeout must be greater than zero",
+            "pass --timeout-seconds with a positive integer and rerun the command",
+            environment=env,
+            timeout_seconds=timeout_seconds,
+        )
+    record = get_target(config, env)
+    result = run_primitive(
+        config,
+        "runtime_chat",
+        {
+            "target": record.id,
+            "container_names": record.container_names,
+            "message": message.strip(),
+            "timeout_seconds": timeout_seconds,
+        },
+    )
+    details = result.get("details") or {}
+    return {
+        "ok": bool(result.get("ok")),
+        "status": "success" if result.get("ok") else "failure",
+        "command": canonical_cli_command(record.id, "chat"),
+        "target": record.id,
+        "exit_code": int(result.get("exit_code", 0 if result.get("ok") else 1)),
+        "stdout": str(result.get("stdout") or ""),
+        "stderr": str(result.get("stderr") or ""),
+        "timestamp": utc_now_iso(),
+        "duration_ms": 0,
+        "log_tail": _log_tail(config, record),
+        "chat": details,
+    }
+
+
 def host_lifecycle(config: AppConfig, target: str, action: str) -> dict[str, Any]:
     record = get_target(config, target)
     if record.target_class != "shared_service":

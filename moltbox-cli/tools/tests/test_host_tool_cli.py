@@ -136,3 +136,42 @@ def test_compose_environment_strips_transient_deploy_overrides(monkeypatch) -> N
     assert env["PATH"] == "test-path"
     assert "OPENCLAW_IMAGE" not in env
     assert "MOLTBOX_TOOLS_IMAGE" not in env
+
+
+
+def test_runtime_chat_uses_openclaw_agent_gateway_path(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(host_tool_cli, "_docker_available", lambda: True)
+
+    def fake_run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, '{"ok":true,"reply":"pong"}', "")
+
+    monkeypatch.setattr(host_tool_cli, "_run_command", fake_run_command)
+
+    result = host_tool_cli._runtime_chat(
+        {
+            "target": "test",
+            "container_names": ["openclaw-test"],
+            "message": "ping",
+            "timeout_seconds": 25,
+        }
+    )
+
+    assert result["ok"] is True
+    assert commands == [
+        [
+            "docker",
+            "exec",
+            "openclaw-test",
+            "/usr/local/bin/openclaw",
+            "--json",
+            "agent",
+            "--message",
+            "ping",
+            "--timeout",
+            "25",
+        ]
+    ]
+    assert "--local" not in commands[0]

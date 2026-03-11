@@ -378,6 +378,58 @@ def _restart_runtime(payload: dict[str, Any]) -> dict[str, Any]:
     return _compose_lifecycle("restart_runtime", payload, ["restart"])
 
 
+def _runtime_chat(payload: dict[str, Any]) -> dict[str, Any]:
+    if not _docker_available():
+        return _result("runtime_chat", False, errors=["docker_not_available"])
+    container_names = [str(item) for item in payload.get("container_names", [])]
+    if not container_names:
+        return _result("runtime_chat", False, errors=["target_has_no_containers"])
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        return _result("runtime_chat", False, errors=["message_required"])
+    timeout_seconds = max(int(payload.get("timeout_seconds", 30)), 1)
+    command = [
+        "docker",
+        "exec",
+        container_names[0],
+        "/usr/local/bin/openclaw",
+        "--json",
+        "agent",
+        "--message",
+        message,
+        "--timeout",
+        str(timeout_seconds),
+    ]
+    completed = _run_command(command)
+    stdout = completed.stdout.strip()
+    parsed_output: dict[str, Any] | None = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            parsed_output = parsed
+    ok = completed.returncode == 0
+    errors: list[str] = []
+    if not ok:
+        errors.append(completed.stderr.strip() or stdout or "runtime_chat_failed")
+    return _result(
+        "runtime_chat",
+        ok,
+        details={
+            "container_name": container_names[0],
+            "message": message,
+            "timeout_seconds": timeout_seconds,
+            "openclaw_command": command,
+            "cli_stdout": stdout,
+            "cli_stderr": completed.stderr.strip(),
+            "cli_output": parsed_output,
+        },
+        errors=errors,
+    )
+
+
 def _snapshot_target(payload: dict[str, Any]) -> dict[str, Any]:
     snapshot_dir = Path(str(payload["snapshot_dir"]))
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -502,6 +554,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "start_runtime": _start_runtime,
     "stop_runtime": _stop_runtime,
     "restart_runtime": _restart_runtime,
+    "runtime_chat": _runtime_chat,
     "snapshot_target": _snapshot_target,
     "restore_target_snapshot": _restore_target_snapshot,
     "validate_target": _validate_target,
