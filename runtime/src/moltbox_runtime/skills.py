@@ -32,7 +32,15 @@ def _container_exists(container_name: str) -> bool:
     return completed.returncode == 0
 
 
-def resolve_openclaw_container() -> str:
+def resolve_openclaw_container(runtime_name: str | None = None) -> str:
+    if runtime_name:
+        if _container_exists(runtime_name):
+            return runtime_name
+        raise ConfigError(
+            f"requested OpenClaw runtime '{runtime_name}' is not currently running",
+            "deploy the requested runtime or choose a different --runtime target before deploying skills",
+            runtime=runtime_name,
+        )
     configured = os.environ.get("MOLTBOX_OPENCLAW_CONTAINER")
     if configured and _container_exists(configured):
         return configured
@@ -41,7 +49,7 @@ def resolve_openclaw_container() -> str:
             return candidate
     raise ConfigError(
         "no supported OpenClaw runtime container is currently running",
-        "deploy the production OpenClaw runtime or set MOLTBOX_OPENCLAW_CONTAINER before deploying skills",
+        "deploy an OpenClaw runtime first, or pass --runtime to `moltbox skill deploy` when targeting a non-default runtime",
         container_candidates=list(OPENCLAW_CONTAINER_CANDIDATES),
     )
 
@@ -335,8 +343,14 @@ def _parse_json_output(command_name: str, completed: subprocess.CompletedProcess
     return payload
 
 
-def deploy_plugin_backed_skill(config: GatewayConfig, *, skill_name: str, package_dir: Path) -> dict[str, Any]:
-    container_name = resolve_openclaw_container()
+def deploy_plugin_backed_skill(
+    config: GatewayConfig,
+    *,
+    skill_name: str,
+    package_dir: Path,
+    runtime_name: str | None = None,
+) -> dict[str, Any]:
+    container_name = resolve_openclaw_container(runtime_name)
     manifest = _read_manifest(package_dir)
     plugin_id = _plugin_id(manifest, package_dir)
     runtime_config_path = "/home/node/.openclaw/openclaw.json"
@@ -414,8 +428,14 @@ def deploy_plugin_backed_skill(config: GatewayConfig, *, skill_name: str, packag
     }
 
 
-def deploy_pure_skill(config: GatewayConfig, *, skill_name: str, package_dir: Path) -> dict[str, Any]:
-    container_name = resolve_openclaw_container()
+def deploy_pure_skill(
+    config: GatewayConfig,
+    *,
+    skill_name: str,
+    package_dir: Path,
+    runtime_name: str | None = None,
+) -> dict[str, Any]:
+    container_name = resolve_openclaw_container(runtime_name)
     staged_skill_dir = _copy_package_to_container(container_name, package_dir, "/home/node/.openclaw/skills")
     restart_result = _restart_container(container_name)
     skill_info = _parse_json_output(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -199,7 +198,7 @@ def render_service(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     runtime_context = runtime_template_context(config, spec)
-    public_hostname = runtime_context.get("public_hostname") or socket.gethostname().strip().split(".", 1)[0]
+    public_hostname = runtime_context.get("public_hostname") or ""
     context = {
         "service_name": spec.canonical_name,
         "component_name": spec.canonical_name,

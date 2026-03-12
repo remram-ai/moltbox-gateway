@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from moltbox_commands.core.components import resolve_component
 from moltbox_commands.core.errors import ValidationError
 from moltbox_repos.adapters import load_skill_recipe, skill_package_resource
 from moltbox_runtime import skills as runtime_skill_operations
@@ -63,7 +64,20 @@ def _optional_skill_recipe(config: Any, skill_name: str):
         return None
 
 
-def deploy_skill(config: Any, skill_name: str) -> dict[str, Any]:
+def _resolved_runtime_name(runtime_name: str | None) -> str | None:
+    if runtime_name is None:
+        return None
+    spec = resolve_component(runtime_name)
+    if not spec.supports_runtime:
+        raise ValidationError(
+            f"component '{runtime_name}' is not a runtime target",
+            "use an OpenClaw runtime such as openclaw-dev, openclaw-test, or openclaw",
+            runtime=runtime_name,
+        )
+    return spec.canonical_name
+
+
+def deploy_skill(config: Any, skill_name: str, *, runtime_name: str | None = None) -> dict[str, Any]:
     package_resource = _optional_skill_package(config, skill_name)
     recipe_loaded = _optional_skill_recipe(config, skill_name)
     if package_resource is None and recipe_loaded is None:
@@ -75,6 +89,7 @@ def deploy_skill(config: Any, skill_name: str) -> dict[str, Any]:
 
     operations: list[dict[str, Any]] = []
     install_result: dict[str, Any] | None = None
+    resolved_runtime = _resolved_runtime_name(runtime_name)
     recipe_resource = None
     recipe: dict[str, Any] = {}
     plan = {
@@ -90,12 +105,14 @@ def deploy_skill(config: Any, skill_name: str) -> dict[str, Any]:
                 config,
                 skill_name=skill_name,
                 package_dir=package_resource.path,
+                runtime_name=resolved_runtime,
             )
         else:
             install_result = runtime_skill_operations.deploy_pure_skill(
                 config,
                 skill_name=skill_name,
                 package_dir=package_resource.path,
+                runtime_name=resolved_runtime,
             )
         operations.append(
             {
@@ -124,6 +141,8 @@ def deploy_skill(config: Any, skill_name: str) -> dict[str, Any]:
     return success_payload(
         f"moltbox skill deploy {skill_name}",
         skill=skill_name,
+        requested_runtime=runtime_name,
+        resolved_runtime=resolved_runtime,
         skill_package=package_resource.as_dict() if package_resource is not None else None,
         install_result=install_result,
         skill_recipe=recipe_resource.as_dict() if recipe_resource is not None else None,

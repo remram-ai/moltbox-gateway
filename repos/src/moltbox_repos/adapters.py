@@ -45,6 +45,32 @@ class RepoResource:
         }
 
 
+@dataclass(frozen=True)
+class RepoMirror:
+    label: str
+    repo_name: str
+    configured_source: str | None
+    checkout_dir: Path
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {
+            "label": self.label,
+            "repo_name": self.repo_name,
+            "configured_source": self.configured_source,
+            "checkout_dir": str(self.checkout_dir),
+        }
+
+
+_REPO_LABELS = {
+    "services": "moltbox-services",
+    "moltbox-services": "moltbox-services",
+    "runtime": "moltbox-runtime",
+    "moltbox-runtime": "moltbox-runtime",
+    "skills": "remram-skills",
+    "remram-skills": "remram-skills",
+}
+
+
 def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=str(cwd) if cwd else None, capture_output=True, text=True, check=False)
 
@@ -74,6 +100,61 @@ def _require_repo_url(name: str, url: str | None) -> str:
         f"set the {name} repository URL before running this command",
         repository=name,
     )
+
+
+def _configured_repo_url(config: GatewayConfig, repo_name: str) -> str | None:
+    if repo_name == "moltbox-services":
+        return config.services_repo_url
+    if repo_name == "moltbox-runtime":
+        return config.runtime_repo_url
+    if repo_name == "remram-skills":
+        return config.skills_repo_url
+    raise ValidationError(
+        f"repository '{repo_name}' is not supported",
+        "use services, runtime, skills, or the full repository name",
+        repository=repo_name,
+    )
+
+
+def _normalize_repo_label(repo_name: str) -> str:
+    normalized = repo_name.strip().lower()
+    if not normalized:
+        raise ValidationError(
+            "repository name is required",
+            "use services, runtime, skills, or all",
+        )
+    if normalized == "all":
+        return normalized
+    canonical = _REPO_LABELS.get(normalized)
+    if canonical is None:
+        raise ValidationError(
+            f"repository '{repo_name}' is not supported",
+            "use services, runtime, skills, or the full repository name",
+            repository=repo_name,
+        )
+    return canonical
+
+
+def _mirror_for_repo(config: GatewayConfig, repo_name: str) -> RepoMirror:
+    canonical = _normalize_repo_label(repo_name)
+    configured_source = _configured_repo_url(config, canonical)
+    if configured_source and "://" not in configured_source:
+        checkout_dir = Path(configured_source).expanduser().resolve()
+    else:
+        checkout_dir = (config.layout.upstream_root / canonical).resolve()
+    return RepoMirror(
+        label=canonical.removeprefix("moltbox-").removeprefix("remram-"),
+        repo_name=canonical,
+        configured_source=configured_source,
+        checkout_dir=checkout_dir,
+    )
+
+
+def _selected_mirrors(config: GatewayConfig, repo_name: str) -> list[RepoMirror]:
+    canonical = _normalize_repo_label(repo_name)
+    if canonical == "all":
+        return [_mirror_for_repo(config, candidate) for candidate in ("services", "runtime", "skills")]
+    return [_mirror_for_repo(config, canonical)]
 
 
 @contextmanager
@@ -176,6 +257,182 @@ def _ensure_checkout(config: GatewayConfig, name: str, url: str | None) -> RepoC
             checkout_dir=str(checkout_dir),
         )
     return RepoCheckout(name=name, url=resolved_url, checkout_dir=checkout_dir, head=head.stdout.strip())
+
+
+def _ensure_git_checkout(path: Path, *, repo_name: str) -> None:
+    if not (path / ".git").exists():
+        raise ConfigError(
+            f"repository mirror path is not a Git checkout: {path}",
+            "repair the upstream repository mirror and rerun the command",
+            repository=repo_name,
+            checkout_dir=str(path),
+        )
+
+
+def _head_for_checkout(path: Path, *, repo_name: str) -> str:
+    head = _git("-C", str(path), "rev-parse", "HEAD")
+    if head.returncode != 0:
+        raise ConfigError(
+            f"failed to resolve {repo_name} repository HEAD",
+            "repair the Git checkout and rerun the command",
+            repository=repo_name,
+            checkout_dir=str(path),
+            git_stderr=head.stderr.strip(),
+        )
+    return head.stdout.strip()
+
+
+def _refresh_cache_checkout(config: GatewayConfig, repo_name: str) -> dict[str, Any]:
+    checkout_dir = config.layout.repos_root / repo_name
+    if not checkout_dir.exists():
+        return {
+            "ok": True,
+            "updated": False,
+            "reason": "cache_missing",
+            "checkout_dir": str(checkout_dir),
+        }
+    _ensure_git_checkout(checkout_dir, repo_name=repo_name)
+    _mark_safe_directory(checkout_dir)
+    pulled = _git("-C", str(checkout_dir), "pull", "--ff-only")
+    if pulled.returncode != 0:
+        raise ConfigError(
+            f"failed to refresh the cached {repo_name} checkout",
+            "repair the cached checkout or remove it and rerun the command",
+            repository=repo_name,
+            checkout_dir=str(checkout_dir),
+            git_stderr=pulled.stderr.strip(),
+        )
+    return {
+        "ok": True,
+        "updated": True,
+        "checkout_dir": str(checkout_dir),
+        "head": _head_for_checkout(checkout_dir, repo_name=repo_name),
+    }
+
+
+def _is_no_tracking_pull_failure(stderr: str) -> bool:
+    normalized = stderr.lower()
+    return "no tracking information" in normalized or "no upstream configured" in normalized or "there is no tracking information" in normalized
+
+
+def _has_git_remote(path: Path) -> bool:
+    remotes = _git("-C", str(path), "remote")
+    if remotes.returncode != 0:
+        return True
+    return bool(remotes.stdout.strip())
+
+
+def refresh_repo_mirrors(config: GatewayConfig, repo_name: str) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for mirror in _selected_mirrors(config, repo_name):
+        configured_source = _require_repo_url(mirror.repo_name, mirror.configured_source)
+        if "://" in configured_source:
+            mirror.checkout_dir.parent.mkdir(parents=True, exist_ok=True)
+            if not mirror.checkout_dir.exists():
+                cloned = _git("clone", configured_source, str(mirror.checkout_dir))
+                if cloned.returncode != 0:
+                    raise ConfigError(
+                        f"failed to clone the {mirror.repo_name} upstream mirror",
+                        "verify the configured repository URL and host Git access, or seed the mirror from a Git bundle",
+                        repository=mirror.repo_name,
+                        repository_url=configured_source,
+                        checkout_dir=str(mirror.checkout_dir),
+                        git_stderr=cloned.stderr.strip(),
+                    )
+            else:
+                _ensure_git_checkout(mirror.checkout_dir, repo_name=mirror.repo_name)
+                pulled = _git("-C", str(mirror.checkout_dir), "pull", "--ff-only")
+                if pulled.returncode != 0:
+                    raise ConfigError(
+                        f"failed to refresh the {mirror.repo_name} upstream mirror",
+                        "repair the upstream mirror checkout or seed it from a Git bundle and rerun the command",
+                        repository=mirror.repo_name,
+                        repository_url=configured_source,
+                        checkout_dir=str(mirror.checkout_dir),
+                        git_stderr=pulled.stderr.strip(),
+                    )
+        else:
+            source_path = Path(configured_source).expanduser().resolve()
+            if not source_path.exists():
+                raise ConfigError(
+                    f"configured source checkout for {mirror.repo_name} was not found",
+                    "repair the host-side upstream mirror path or seed it from a Git bundle",
+                    repository=mirror.repo_name,
+                    checkout_dir=str(source_path),
+                )
+            _ensure_git_checkout(source_path, repo_name=mirror.repo_name)
+            _mark_safe_directory(source_path)
+            pulled = _git("-C", str(source_path), "pull", "--ff-only")
+            if pulled.returncode != 0 and _has_git_remote(source_path) and not _is_no_tracking_pull_failure(pulled.stderr):
+                raise ConfigError(
+                    f"failed to refresh the {mirror.repo_name} upstream mirror",
+                    "repair the upstream mirror checkout or seed it from a Git bundle and rerun the command",
+                    repository=mirror.repo_name,
+                    checkout_dir=str(source_path),
+                    git_stderr=pulled.stderr.strip(),
+                )
+            mirror = RepoMirror(
+                label=mirror.label,
+                repo_name=mirror.repo_name,
+                configured_source=mirror.configured_source,
+                checkout_dir=source_path,
+            )
+
+        _mark_safe_directory(mirror.checkout_dir)
+        results.append(
+            {
+                "mirror": mirror.as_dict(),
+                "head": _head_for_checkout(mirror.checkout_dir, repo_name=mirror.repo_name),
+                "cache": _refresh_cache_checkout(config, mirror.repo_name),
+            }
+        )
+    return results
+
+
+def seed_repo_mirror(config: GatewayConfig, repo_name: str, *, bundle_path: str) -> dict[str, Any]:
+    mirror = _mirror_for_repo(config, repo_name)
+    bundle = Path(bundle_path).expanduser().resolve()
+    if not bundle.exists():
+        raise ValidationError(
+            f"bundle '{bundle}' was not found",
+            "provide an existing Git bundle path and rerun the command",
+            bundle_path=str(bundle),
+            repository=mirror.repo_name,
+        )
+    if mirror.checkout_dir.exists():
+        _ensure_git_checkout(mirror.checkout_dir, repo_name=mirror.repo_name)
+        branch = _git("-C", str(mirror.checkout_dir), "rev-parse", "--abbrev-ref", "HEAD")
+        current_branch = branch.stdout.strip() if branch.returncode == 0 and branch.stdout.strip() and branch.stdout.strip() != "HEAD" else "main"
+        pulled = _git("-C", str(mirror.checkout_dir), "pull", "--ff-only", str(bundle), current_branch)
+        if pulled.returncode != 0:
+            raise ConfigError(
+                f"failed to seed the {mirror.repo_name} upstream mirror from the Git bundle",
+                "verify the bundle contents and rerun the command",
+                repository=mirror.repo_name,
+                checkout_dir=str(mirror.checkout_dir),
+                bundle_path=str(bundle),
+                git_stderr=pulled.stderr.strip(),
+            )
+    else:
+        mirror.checkout_dir.parent.mkdir(parents=True, exist_ok=True)
+        cloned = _git("clone", str(bundle), str(mirror.checkout_dir))
+        if cloned.returncode != 0:
+            raise ConfigError(
+                f"failed to clone the {mirror.repo_name} upstream mirror from the Git bundle",
+                "verify the bundle path and rerun the command",
+                repository=mirror.repo_name,
+                checkout_dir=str(mirror.checkout_dir),
+                bundle_path=str(bundle),
+                git_stderr=cloned.stderr.strip(),
+            )
+
+    _mark_safe_directory(mirror.checkout_dir)
+    return {
+        "mirror": mirror.as_dict(),
+        "bundle_path": str(bundle),
+        "head": _head_for_checkout(mirror.checkout_dir, repo_name=mirror.repo_name),
+        "cache": _refresh_cache_checkout(config, mirror.repo_name),
+    }
 
 
 def services_checkout(config: GatewayConfig) -> RepoCheckout:

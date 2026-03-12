@@ -621,8 +621,6 @@ def deploy_gateway(
             f"{config_mount_path}:/etc/moltbox/config.yaml:ro",
             current_image,
             "moltbox",
-            "--config-path",
-            "/etc/moltbox/config.yaml",
             "service",
             "deploy",
             "gateway",
@@ -680,6 +678,50 @@ def probe_gateway(ssh_target: str, *, gateway_http_port: int) -> dict[str, objec
         recovery_message="inspect the gateway container and logs on the remote host",
     )
     return json.loads(raw)
+
+
+def install_host_cli_wrapper(ssh_target: str) -> dict[str, str]:
+    script = """
+from pathlib import Path
+import json
+import os
+import stat
+
+wrapper = "#!/bin/sh\\nset -eu\\nexec docker exec -i gateway moltbox \\\"$@\\\"\\n"
+candidates = [Path("/usr/local/bin/moltbox"), Path.home() / ".local" / "bin" / "moltbox"]
+
+for candidate in candidates:
+    try:
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        if candidate.exists() and not os.access(candidate, os.W_OK):
+            continue
+        if not candidate.exists() and not os.access(candidate.parent, os.W_OK):
+            continue
+        candidate.write_text(wrapper, encoding="utf-8")
+        current_mode = candidate.stat().st_mode
+        candidate.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        print(json.dumps({"ok": True, "wrapper_path": str(candidate)}))
+        raise SystemExit(0)
+    except OSError:
+        continue
+
+print(json.dumps({
+    "ok": False,
+    "message": "failed to install the host PATH wrapper for moltbox",
+    "candidates": [str(item) for item in candidates],
+}))
+raise SystemExit(1)
+""".strip()
+    completed = _ssh_python(ssh_target, script)
+    raw = _require(
+        completed,
+        error_message="failed to install the Moltbox CLI wrapper on the host PATH",
+        recovery_message="verify that /usr/local/bin or ~/.local/bin is writable for the bootstrap user and rerun bootstrap",
+    )
+    payload = json.loads(raw)
+    if not payload.get("ok"):
+        raise SystemExit(json.dumps(payload, indent=2))
+    return {"wrapper_path": str(payload["wrapper_path"])}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -797,6 +839,7 @@ def main(argv: list[str] | None = None) -> int:
         gateway_ref=args.gateway_ref,
     )
     health_payload = probe_gateway(args.host, gateway_http_port=args.gateway_http_port)
+    host_cli_payload = install_host_cli_wrapper(args.host)
     print(
         json.dumps(
             {
@@ -806,6 +849,7 @@ def main(argv: list[str] | None = None) -> int:
                 "logs_root": args.logs_root,
                 "deploy": deploy_payload,
                 "health": health_payload,
+                "host_cli": host_cli_payload,
             },
             indent=2,
         )

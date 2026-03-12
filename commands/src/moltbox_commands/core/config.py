@@ -12,6 +12,7 @@ from .layout import GatewayLayout, build_layout
 
 DEFAULT_STATE_ROOT = Path("/srv/moltbox-state")
 DEFAULT_LOGS_ROOT = Path("/srv/moltbox-logs")
+CONTAINER_CONFIG_PATH = Path("/etc/moltbox/config.yaml")
 
 
 def _env_value(*env_names: str) -> str | None:
@@ -62,6 +63,21 @@ def _resolve_path(flag_value: str | None, env_names: tuple[str, ...], config_val
     return default.expanduser().resolve()
 
 
+def _running_in_container() -> bool:
+    return Path("/.dockerenv").exists() or os.environ.get("MOLTBOX_RUNNING_IN_CONTAINER") == "1"
+
+
+def _resolve_config_path(flag_value: str | None, default: Path) -> Path:
+    raw = flag_value or _env_value("MOLTBOX_CONFIG_PATH", "REMRAM_CONFIG_PATH")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    if _running_in_container() and CONTAINER_CONFIG_PATH.exists():
+        return CONTAINER_CONFIG_PATH.resolve()
+    if default.exists():
+        return default.expanduser().resolve()
+    return default.expanduser().resolve()
+
+
 def _resolve_string(flag_value: str | None, env_names: tuple[str, ...], config_value: Any, default: str) -> str:
     raw = flag_value or _env_value(*env_names)
     if raw:
@@ -107,6 +123,7 @@ class GatewayConfig:
     skills_repo_url: str | None
     internal_host: str
     internal_port: int
+    public_hostname: str
     cli_command: list[str]
     layout: GatewayLayout
 
@@ -114,12 +131,7 @@ class GatewayConfig:
 def resolve_config(args: Any | None = None) -> GatewayConfig:
     state_root_default = DEFAULT_STATE_ROOT
     config_path_default = state_root_default / "gateway" / "config.yaml"
-    config_path = _resolve_path(
-        getattr(args, "config_path", None),
-        ("MOLTBOX_CONFIG_PATH", "REMRAM_CONFIG_PATH"),
-        None,
-        config_path_default,
-    )
+    config_path = _resolve_config_path(getattr(args, "config_path", None), config_path_default)
     payload = _read_yaml(config_path)
 
     state_root = _resolve_path(
@@ -175,6 +187,12 @@ def resolve_config(args: Any | None = None) -> GatewayConfig:
         _deep_get(payload, "gateway", "port"),
         7474,
     )
+    public_hostname = _resolve_string(
+        None,
+        ("MOLTBOX_PUBLIC_HOSTNAME", "REMRAM_PUBLIC_HOSTNAME", "MOLTBOX_MACHINE_HOSTNAME", "REMRAM_MACHINE_HOSTNAME"),
+        _deep_get(payload, "gateway", "public_hostname") or _deep_get(payload, "host", "hostname"),
+        "",
+    )
     cli_path = _resolve_string(
         getattr(args, "cli_path", None),
         ("MOLTBOX_CLI_PATH", "REMRAM_CLI_PATH"),
@@ -192,6 +210,7 @@ def resolve_config(args: Any | None = None) -> GatewayConfig:
         skills_repo_url=skills_repo_url or None,
         internal_host=internal_host,
         internal_port=internal_port,
+        public_hostname=public_hostname,
         cli_command=[cli_path],
         layout=layout,
     )

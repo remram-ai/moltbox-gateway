@@ -74,13 +74,6 @@ def _discord_guilds_block(component_name: str) -> str:
     return "\n".join(lines)
 
 
-def resolve_public_hostname() -> str:
-    configured = os.environ.get("MOLTBOX_PUBLIC_HOSTNAME") or os.environ.get("REMRAM_PUBLIC_HOSTNAME")
-    if configured and configured.strip():
-        return configured.strip()
-    return ""
-
-
 def runtime_template_context(config: GatewayConfig, spec: ComponentSpec) -> dict[str, str]:
     return {
         "component_name": spec.canonical_name,
@@ -94,7 +87,7 @@ def runtime_template_context(config: GatewayConfig, spec: ComponentSpec) -> dict
         "logs_root": str(config.logs_root),
         "runtime_root": str(config.runtime_artifacts_root),
         "runtime_component_dir": str(config.layout.runtime_component_dir(spec.canonical_name)),
-        "public_hostname": resolve_public_hostname(),
+        "public_hostname": config.public_hostname,
         "discord_enabled": _env_bool(spec.canonical_name, "MOLTBOX_DISCORD_ENABLED", default=False),
         "discord_guilds_block": _discord_guilds_block(spec.canonical_name),
     }

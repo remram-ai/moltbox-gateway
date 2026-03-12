@@ -286,9 +286,10 @@ def test_skill_deploy_plugin_backed_package_uses_runtime_installer(tmp_path: Pat
 
     captured: dict[str, object] = {}
 
-    def fake_plugin_install(config, *, skill_name: str, package_dir: Path):
+    def fake_plugin_install(config, *, skill_name: str, package_dir: Path, runtime_name: str | None = None):
         captured["skill_name"] = skill_name
         captured["package_dir"] = package_dir
+        captured["runtime_name"] = runtime_name
         return {"install_mode": "plugin-backed", "plugin_id": "semantic-router"}
 
     monkeypatch.setattr(skill_commands.runtime_skill_operations, "deploy_plugin_backed_skill", fake_plugin_install)
@@ -301,6 +302,7 @@ def test_skill_deploy_plugin_backed_package_uses_runtime_installer(tmp_path: Pat
     assert payload["install_result"]["install_mode"] == "plugin-backed"
     assert captured["skill_name"] == "semantic-router"
     assert Path(str(captured["package_dir"])).name == "semantic-router"
+    assert captured["runtime_name"] is None
 
 
 def test_service_deploy_gateway_uses_clean_service_pipeline(tmp_path: Path, monkeypatch) -> None:
@@ -970,3 +972,242 @@ def test_deploy_stack_bootstraps_external_networks(monkeypatch, tmp_path: Path) 
 
     assert payload["ok"] is True
     assert payload["details"]["network_bootstrap"]["created"] == ["moltbox_moltbox_internal"]
+
+
+def test_resolve_config_discovers_container_config_path(monkeypatch, tmp_path: Path) -> None:
+    from moltbox_commands.core import config as config_module
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "gateway:\n"
+        "  host: 0.0.0.0\n"
+        "  port: 8080\n"
+        "  public_hostname: moltbox-prime\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MOLTBOX_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("REMRAM_CONFIG_PATH", raising=False)
+    monkeypatch.setattr(config_module, "CONTAINER_CONFIG_PATH", config_path)
+    monkeypatch.setattr(config_module, "_running_in_container", lambda: True)
+
+    resolved = config_module.resolve_config(Args())
+
+    assert resolved.config_path == config_path.resolve()
+    assert resolved.internal_port == 8080
+    assert resolved.public_hostname == "moltbox-prime"
+
+
+def test_skill_deploy_accepts_runtime_flag(tmp_path: Path, monkeypatch) -> None:
+    skills_repo = create_git_repo(
+        tmp_path / "remram-skills",
+        {
+            "skills/semantic-router/SKILL.md": "# Semantic Router\n",
+            "skills/semantic-router/openclaw.plugin.json": json.dumps({"id": "semantic-router", "skills": ["./"]}, indent=2) + "\n",
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SKILLS_REPO_URL", str(skills_repo))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    from moltbox_commands import skill as skill_commands
+
+    captured: dict[str, object] = {}
+
+    def fake_plugin_install(config, *, skill_name: str, package_dir: Path, runtime_name: str | None = None):
+        captured["skill_name"] = skill_name
+        captured["runtime_name"] = runtime_name
+        return {"install_mode": "plugin-backed", "plugin_id": "semantic-router", "target_container": runtime_name}
+
+    monkeypatch.setattr(skill_commands.runtime_skill_operations, "deploy_plugin_backed_skill", fake_plugin_install)
+
+    payload = execute(["skill", "deploy", "semantic-router", "--runtime", "openclaw-test"])
+
+    assert payload["ok"] is True
+    assert payload["requested_runtime"] == "openclaw-test"
+    assert payload["resolved_runtime"] == "openclaw-test"
+    assert captured["runtime_name"] == "openclaw-test"
+
+
+def test_component_skill_deploy_targets_requested_runtime(tmp_path: Path, monkeypatch) -> None:
+    skills_repo = create_git_repo(
+        tmp_path / "remram-skills",
+        {
+            "skills/semantic-router/SKILL.md": "# Semantic Router\n",
+            "skills/semantic-router/openclaw.plugin.json": json.dumps({"id": "semantic-router", "skills": ["./"]}, indent=2) + "\n",
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SKILLS_REPO_URL", str(skills_repo))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    from moltbox_commands import skill as skill_commands
+
+    captured: dict[str, object] = {}
+
+    def fake_plugin_install(config, *, skill_name: str, package_dir: Path, runtime_name: str | None = None):
+        captured["runtime_name"] = runtime_name
+        return {"install_mode": "plugin-backed", "plugin_id": "semantic-router", "target_container": runtime_name}
+
+    monkeypatch.setattr(skill_commands.runtime_skill_operations, "deploy_plugin_backed_skill", fake_plugin_install)
+
+    payload = execute(["openclaw-test", "skill", "deploy", "semantic-router"])
+
+    assert payload["ok"] is True
+    assert payload["requested_runtime"] == "openclaw-test"
+    assert payload["resolved_runtime"] == "openclaw-test"
+    assert captured["runtime_name"] == "openclaw-test"
+
+
+def test_legacy_host_ssl_command_reports_replacement(tmp_path: Path) -> None:
+    env = {
+        "MOLTBOX_STATE_ROOT": str(tmp_path / ".remram"),
+        "MOLTBOX_RUNTIME_ROOT": str(tmp_path / "Moltbox"),
+        "MOLTBOX_REPO_ROOT": str(Path(__file__).resolve().parents[1]),
+    }
+
+    completed = run_cli("host", "ssl", "deploy", env=env)
+
+    assert completed.returncode != 0
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is False
+    assert payload["replacement_command"] == "moltbox service deploy caddy"
+
+
+def test_gateway_repo_refresh_updates_local_upstream_mirror_and_cache(tmp_path: Path, monkeypatch) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/caddy/compose.yml.template": "services:\n  caddy:\n    image: caddy:latest\n",
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+    config = resolve_config(Args())
+
+    _ = repo_adapters.list_services(config)
+
+    updated_file = services_repo / "services" / "opensearch" / "compose.yml.template"
+    updated_file.parent.mkdir(parents=True, exist_ok=True)
+    updated_file.write_text("services:\n  opensearch:\n    image: opensearch:latest\n", encoding="utf-8")
+    add = repo_adapters._git("-C", str(services_repo), "add", ".")
+    assert add.returncode == 0, add.stderr
+    commit = repo_adapters._git(
+        "-C",
+        str(services_repo),
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "user.name=Test User",
+        "commit",
+        "-m",
+        "add opensearch",
+    )
+    assert commit.returncode == 0, commit.stderr
+
+    payload = execute(["gateway", "repo", "refresh", "services"])
+
+    assert payload["ok"] is True
+    assert payload["requested_repo"] == "services"
+    mirrors = payload["mirrors"]
+    assert len(mirrors) == 1
+    assert mirrors[0]["mirror"]["repo_name"] == "moltbox-services"
+    assert mirrors[0]["cache"]["updated"] is True
+    cached_repo = config.layout.repos_root / "moltbox-services"
+    assert (cached_repo / "services" / "opensearch" / "compose.yml.template").exists()
+
+
+def test_gateway_repo_seed_clones_bundle_into_configured_mirror(tmp_path: Path, monkeypatch) -> None:
+    source_repo = create_git_repo(
+        tmp_path / "bundle-source",
+        {
+            "services/caddy/compose.yml.template": "services:\n  caddy:\n    image: caddy:latest\n",
+        },
+    )
+    bundle_path = tmp_path / "moltbox-services.bundle"
+    bundle = repo_adapters._git("-C", str(source_repo), "bundle", "create", str(bundle_path), "--all")
+    assert bundle.returncode == 0, bundle.stderr
+
+    mirror_path = tmp_path / ".remram" / "upstream" / "moltbox-services"
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(mirror_path))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    payload = execute(["gateway", "repo", "seed", "services", "--bundle", str(bundle_path)])
+
+    assert payload["ok"] is True
+    assert payload["mirror"]["mirror"]["repo_name"] == "moltbox-services"
+    assert mirror_path.exists()
+    assert (mirror_path / "services" / "caddy" / "compose.yml.template").exists()
+
+
+def test_caddy_render_uses_only_explicit_machine_hostname(tmp_path: Path, monkeypatch) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/caddy/compose.yml.template": (
+                "services:\n"
+                "  caddy:\n"
+                "    image: caddy:latest\n"
+                "    volumes:\n"
+                "      - \"./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro\"\n"
+            ),
+            "services/caddy/service.yaml": (
+                "compose_project: caddy\n"
+                "container_names:\n"
+                "  - caddy\n"
+                "runtime_required: true\n"
+            ),
+        },
+    )
+    runtime_repo = create_git_repo(
+        tmp_path / "moltbox-runtime",
+        {
+            "caddy/Caddyfile.template": (
+                "@dev host moltbox-dev{{ dev_public_host }}\n"
+                "@test host moltbox-test{{ test_public_host }}\n"
+                "@prod host moltbox-prod{{ prod_public_host }}\n"
+            ),
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
+    monkeypatch.delenv("MOLTBOX_PUBLIC_HOSTNAME", raising=False)
+    monkeypatch.delenv("REMRAM_PUBLIC_HOSTNAME", raising=False)
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+    resolve_config(Args())
+
+    monkeypatch.setattr(service_pipeline.docker_engine, "docker_available", lambda: True)
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "inspect_containers",
+        lambda names: {"ok": True, "details": {"container_state": {"containers": []}, "container_ids": []}},
+    )
+    monkeypatch.setattr(service_pipeline.docker_engine, "pull_stack", lambda render_dir, compose_project: {"ok": True})
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "deploy_stack",
+        lambda **kwargs: {"ok": True, "details": {"compose_command": ["docker", "compose"]}},
+    )
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "validate_containers",
+        lambda names, timeout_seconds=30, poll_interval_seconds=2: {"ok": True, "details": {"result": "pass"}},
+    )
+
+    payload = execute(["service", "deploy", "caddy"])
+
+    assert payload["ok"] is True
+    caddyfile = (Path(payload["render"]["output_dir"]) / "config" / "caddy" / "Caddyfile").read_text(encoding="utf-8")
+    assert "@dev host moltbox-dev" in caddyfile
+    assert "@test host moltbox-test" in caddyfile
+    assert "@prod host moltbox-prod" in caddyfile
+    assert "moltbox-dev." not in caddyfile
+    assert "moltbox-test." not in caddyfile
+    assert "moltbox-prod." not in caddyfile

@@ -14,6 +14,8 @@ class GatewayCommand:
     verb: str
     version: str | None = None
     commit: str | None = None
+    repo_name: str | None = None
+    bundle_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class ComponentCommand:
 class SkillCommand:
     verb: str
     skill_name: str
+    runtime_name: str | None = None
 
 
 CommandRequest = GatewayCommand | ServiceCommand | ComponentCommand | SkillCommand
@@ -51,6 +54,10 @@ def dispatch(config: Any, request: CommandRequest) -> dict[str, Any]:
             return gateway_commands.logs_gateway(config)
         if request.verb == "update":
             return gateway_commands.update_gateway(config, version=request.version, commit=request.commit)
+        if request.verb == "repo_refresh":
+            return gateway_commands.refresh_gateway_repo(config, request.repo_name)
+        if request.verb == "repo_seed":
+            return gateway_commands.seed_gateway_repo(config, str(request.repo_name), str(request.bundle_path))
         raise ValueError(f"unsupported gateway verb: {request.verb}")
 
     if isinstance(request, ServiceCommand):
@@ -78,6 +85,6 @@ def dispatch(config: Any, request: CommandRequest) -> dict[str, Any]:
         return component_commands.execute_component(config, request.component_name, request.verb)
 
     if isinstance(request, SkillCommand):
-        return skill_commands.deploy_skill(config, request.skill_name)
+        return skill_commands.deploy_skill(config, request.skill_name, runtime_name=request.runtime_name)
 
     raise TypeError(f"unsupported command request: {type(request)!r}")

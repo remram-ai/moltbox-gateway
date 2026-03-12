@@ -8,6 +8,7 @@ from typing import Any
 
 from moltbox_commands.core.errors import ConfigError
 from moltbox_docker import engine as docker_engine
+from moltbox_repos import adapters as repo_adapters
 from moltbox_services import pipeline as service_pipeline
 
 from .service import deploy_service
@@ -156,3 +157,21 @@ def update_gateway(config: Any, *, version: str | None = None, commit: str | Non
     payload = deploy_service(config, "gateway", version=version, commit=commit)
     payload["command"] = "moltbox gateway update"
     return payload
+
+
+def refresh_gateway_repo(config: Any, repo_name: str | None) -> dict[str, Any]:
+    requested_repo = repo_name or "all"
+    return success_payload(
+        f"moltbox gateway repo refresh {requested_repo}",
+        requested_repo=requested_repo,
+        mirrors=repo_adapters.refresh_repo_mirrors(config, requested_repo),
+    )
+
+
+def seed_gateway_repo(config: Any, repo_name: str, bundle_path: str) -> dict[str, Any]:
+    return success_payload(
+        f"moltbox gateway repo seed {repo_name}",
+        requested_repo=repo_name,
+        bundle_path=bundle_path,
+        mirror=repo_adapters.seed_repo_mirror(config, repo_name, bundle_path=bundle_path),
+    )

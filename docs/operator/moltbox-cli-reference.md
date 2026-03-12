@@ -1,242 +1,212 @@
 # Moltbox CLI Reference
 
-This document describes the current operator CLI implemented in `moltbox-cli/` on the `main` branch.
+This document describes the current Moltbox CLI implemented in the gateway control plane.
+
+Architecture authority:
+
+- `remram/architecture-v2/gateway.md`
+- `remram/architecture-v2/services.md`
+- `remram/architecture-v2/runtime.md`
+- `remram/architecture-v2/skills.md`
 
 ## Command Shape
 
-The canonical command is:
+The canonical grammar is:
 
 ```text
-moltbox <domain> ...
+moltbox <component> <command>
 ```
 
-Domains:
+Primary components:
 
-- `tools`
-- `host`
-- `runtime`
+- `gateway`
+- `service`
+- `skill`
+- `openclaw`
+- `openclaw-dev`
+- `openclaw-test`
+- `openclaw-prod`
+- `caddy`
+- `opensearch`
 
-Canonical forms:
+Alias rule:
+
+- `openclaw == openclaw-prod`
+
+## Host Invocation
+
+On the appliance host, bootstrap installs a PATH wrapper so operators can run:
+
+```bash
+moltbox ...
+```
+
+directly from the Linux host shell.
+
+The wrapper executes the CLI inside the running `gateway` container. Inside that container, the CLI now auto-discovers the canonical mounted config at:
 
 ```text
-moltbox tools <verb>
-moltbox host <service> <verb>
-moltbox runtime <environment> <verb>
+/etc/moltbox/config.yaml
 ```
+
+Normal operator use should not require `--config-path`.
 
 ## Global Options
 
-These options can be passed before the domain:
+Advanced overrides remain available:
 
 ```text
 --config-path
---policy-path
 --state-root
+--logs-root
 --runtime-artifacts-root
+--services-repo-url
+--runtime-repo-url
+--skills-repo-url
 --internal-host
 --internal-port
 --cli-path
 ```
 
-These are primarily for advanced operator override, container bootstrap, and testing. In normal host operation, defaults are usually sufficient.
+These are mainly for bootstrap, testing, and controlled overrides.
 
-## Tools Domain
+## Gateway Commands
 
-Syntax:
-
-```text
-moltbox tools <verb>
-```
-
-Supported verbs:
-
-- `version`
-- `health`
-- `serve`
-- `status`
-- `inspect`
-- `update`
-- `rollback`
-- `logs`
-
-Common examples:
+Gateway self-management:
 
 ```bash
-moltbox tools version
-moltbox tools health
-moltbox tools status
-moltbox tools inspect
-moltbox tools update
-moltbox tools rollback
-moltbox tools logs
+moltbox gateway health
+moltbox gateway status
+moltbox gateway inspect
+moltbox gateway logs
+moltbox gateway update
+```
+
+Host-side upstream repo mirror management:
+
+```bash
+moltbox gateway repo refresh
+moltbox gateway repo refresh services
+moltbox gateway repo refresh runtime
+moltbox gateway repo refresh skills
+
+moltbox gateway repo seed services --bundle /path/to/moltbox-services.bundle
+moltbox gateway repo seed runtime --bundle /path/to/moltbox-runtime.bundle
+moltbox gateway repo seed skills --bundle /path/to/remram-skills.bundle
 ```
 
 Notes:
 
-- `serve` is the long-running control-plane process used inside the tools container.
-- `update` is the normal operator path for redeploying the tools service from the current repo state.
+- `repo refresh` updates the configured host-side upstream checkout and then refreshes the cached working checkout used by the gateway.
+- `repo seed` supports advancing a mirror from a Git bundle when direct GitHub access is unavailable on the appliance.
 
-## Host Domain
+## Service Commands
 
-Syntax:
-
-```text
-moltbox host <service> <verb>
-```
-
-Supported services:
-
-- `ssl`
-- `ollama`
-- `opensearch`
-
-Compatibility alias:
-
-- `caddy` resolves to `ssl`
-
-Supported verbs:
-
-- `deploy`
-- `rollback`
-- `status`
-- `inspect`
-- `logs`
-- `start`
-- `stop`
-- `restart`
-
-Common examples:
+`service` is the deployment pipeline for container lifecycle operations.
 
 ```bash
-moltbox host ssl deploy
-moltbox host ssl status
-moltbox host ssl inspect
-moltbox host ssl logs
+moltbox service list
+moltbox service inspect gateway
+moltbox service status caddy
+moltbox service logs opensearch
 
-moltbox host ollama deploy
-moltbox host ollama status
+moltbox service deploy gateway
+moltbox service deploy openclaw-dev
+moltbox service deploy openclaw-test
+moltbox service deploy openclaw-prod
+moltbox service deploy caddy
+moltbox service deploy opensearch
 
-moltbox host opensearch deploy
-moltbox host opensearch status
+moltbox service start caddy
+moltbox service stop caddy
+moltbox service restart caddy
+moltbox service rollback caddy
+moltbox service doctor caddy
+```
+
+Artifact overrides:
+
+```bash
+moltbox service deploy openclaw-prod --version 1.4.2
+moltbox service deploy gateway --commit abc1234
+```
+
+## Runtime Component Commands
+
+Runtime operations target real runtime components:
+
+```bash
+moltbox openclaw status
+moltbox openclaw inspect
+moltbox openclaw logs
+moltbox openclaw config sync
+moltbox openclaw reload
+moltbox openclaw doctor
+moltbox openclaw monitor
+```
+
+Environment-specific forms:
+
+```bash
+moltbox openclaw-dev status
+moltbox openclaw-dev config sync
+moltbox openclaw-dev reload
+
+moltbox openclaw-test status
+moltbox openclaw-test config sync
+moltbox openclaw-test reload
+
+moltbox openclaw-prod status
+moltbox openclaw-prod config sync
+moltbox openclaw-prod reload
+```
+
+## Skill Commands
+
+`skill deploy` is an orchestration pipeline.
+
+Default runtime targeting:
+
+```bash
+moltbox skill deploy semantic-router
+```
+
+Explicit runtime targeting:
+
+```bash
+moltbox skill deploy semantic-router --runtime openclaw-test
+moltbox openclaw-test skill deploy semantic-router
 ```
 
 Notes:
 
-- Use `ssl` in operator docs and commands. `caddy` is compatibility-only.
-- `inspect` returns deployment and container metadata.
-- `logs` returns container log output through the control plane.
+- plugin-backed skills and pure skills are both supported
+- runtime targeting should use canonical Moltbox runtimes such as `openclaw-dev`, `openclaw-test`, `openclaw-prod`, or `openclaw`
 
-## Runtime Domain
+## Output Model
 
-Syntax:
+The CLI emits structured JSON for both success and failure.
 
-```text
-moltbox runtime <environment> <verb>
-```
+Success payloads include command metadata and operation details.
 
-Supported environments:
-
-- `dev`
-- `test`
-- `prod`
-
-Supported verbs:
-
-- `deploy`
-- `rollback`
-- `status`
-- `inspect`
-- `logs`
-- `start`
-- `stop`
-- `restart`
-
-Common examples:
-
-```bash
-moltbox runtime dev deploy
-moltbox runtime dev status
-moltbox runtime dev inspect
-moltbox runtime dev logs
-moltbox runtime dev rollback
-
-moltbox runtime test deploy
-moltbox runtime test status
-moltbox runtime test logs
-
-moltbox runtime prod inspect
-```
-
-Operational notes:
-
-- `dev` is the full-feature integration environment.
-- `test` is the current UAT candidate environment.
-- `prod` is part of the CLI surface even if no managed prod runtime is currently deployed.
-
-## Output Behavior
-
-The CLI emits structured JSON responses for both success and failure.
-
-Typical success payloads include fields such as:
-
-- `target`
-- `verb`
-- `status`
-- `exit_code`
-
-Error payloads include structured recovery guidance, for example:
+Failure payloads include:
 
 - `error_type`
 - `error_message`
 - `recovery_message`
 
-This makes the CLI suitable for both manual use and automation.
+This output is intended for both operators and automation.
 
-## Operator Usage Pattern
+## Legacy Command Surface
 
-Recommended normal workflow:
+The older `tools`, `host`, and `runtime` namespaces are no longer canonical.
 
-1. Check tool health:
-
-```bash
-moltbox tools health
-```
-
-2. Check shared services:
-
-```bash
-moltbox host ssl status
-moltbox host ollama status
-moltbox host opensearch status
-```
-
-3. Check runtime state:
-
-```bash
-moltbox runtime dev status
-moltbox runtime test status
-```
-
-4. Use `inspect` before risky changes:
-
-```bash
-moltbox runtime dev inspect
-moltbox host ssl inspect
-```
-
-5. Use `deploy` or `rollback` as needed:
-
-```bash
-moltbox runtime dev deploy
-moltbox runtime dev rollback
-```
-
-## MCP Boundary
-
-The local CLI on the host is trusted operator access and is not permission-gated.
-
-Remote access happens through HTTPS MCP and may expose only a subset of these operations depending on the current policy file:
+Examples:
 
 ```text
-/home/jpekovitch/.remram/tools/control-plane-policy.yaml
+moltbox tools status      -> moltbox gateway status
+moltbox host ssl deploy   -> moltbox service deploy caddy
+moltbox runtime dev reload -> moltbox openclaw-dev reload
 ```
+
+The CLI now returns explicit replacement guidance when those legacy forms are used.

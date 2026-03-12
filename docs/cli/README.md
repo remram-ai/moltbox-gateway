@@ -1,39 +1,35 @@
-# MoltBox CLI Grammar
+# Moltbox CLI
 
-The CLI command is `moltbox`.
-
-The folder `moltbox-cli` is not part of the CLI namespace.
-
-Canonical grammar:
+The Moltbox CLI follows the architecture-v2 grammar:
 
 ```text
-moltbox <domain> <target> <verb>
+moltbox <component> <command>
 ```
-
-Domains:
-
-- `runtime`
-- `host`
-- `tools`
-
-Domain forms:
-
-- `moltbox runtime <environment> <verb>`
-- `moltbox host <service> <verb>`
-- `moltbox tools <verb>`
-
-`tools` is a singleton domain, so it uses the shortened form without a separate target token.
-
-Verb safety:
-
-- Inspection verbs: `status`, `inspect`, `logs`, `health`, `version`
-- Mutation verbs: `deploy`, `rollback`, `start`, `stop`, `restart`, `update`
 
 Examples:
 
-- `moltbox runtime dev deploy`
-- `moltbox runtime prod logs`
-- `moltbox host ollama deploy`
-- `moltbox host opensearch status`
-- `moltbox tools version`
-- `moltbox tools update`
+```text
+moltbox gateway status
+moltbox service deploy caddy
+moltbox openclaw-dev reload
+moltbox skill deploy semantic-router --runtime openclaw-test
+```
+
+Current component groups:
+
+- `gateway`
+- `service`
+- `skill`
+- runtime components such as `openclaw-dev`, `openclaw-test`, and `openclaw-prod`
+- service components such as `caddy` and `opensearch`
+
+The authoritative architecture lives in:
+
+- `remram/architecture-v2/gateway.md`
+- `remram/architecture-v2/services.md`
+- `remram/architecture-v2/runtime.md`
+- `remram/architecture-v2/skills.md`
+
+Operator reference:
+
+- `../operator/moltbox-cli-reference.md`
