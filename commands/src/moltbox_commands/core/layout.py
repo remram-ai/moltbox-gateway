@@ -47,11 +47,17 @@ def find_repo_root(start: Path | None = None) -> Path:
     configured = os.environ.get("MOLTBOX_REPO_ROOT")
     if configured:
         return Path(configured).expanduser().resolve()
+    search_roots: list[Path] = []
+    cwd = Path.cwd().resolve()
+    search_roots.append(cwd)
     current = (start or Path(__file__)).resolve()
-    for candidate in (current, *current.parents):
-        if (candidate / ".git").exists():
-            return candidate
-    raise RuntimeError("unable to locate remram-gateway repo root")
+    if current not in search_roots:
+        search_roots.append(current)
+    for root in search_roots:
+        for candidate in (root, *root.parents):
+            if (candidate / ".git").exists():
+                return candidate
+    return cwd
 
 
 def build_layout(state_root: Path, runtime_artifacts_root: Path, logs_root: Path) -> GatewayLayout:

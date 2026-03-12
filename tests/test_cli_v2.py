@@ -7,6 +7,7 @@ from pathlib import Path
 
 from moltbox_cli.cli import execute
 from moltbox_commands.core.config import resolve_config
+from moltbox_commands.core.layout import find_repo_root
 from moltbox_docker import engine as docker_engine
 from moltbox_repos import adapters as repo_adapters
 from moltbox_services import pipeline as service_pipeline
@@ -565,6 +566,19 @@ def test_gateway_serve_routes_to_gateway_server(monkeypatch, tmp_path: Path) -> 
 
     assert cli_module.run(["gateway", "serve"]) == 0
     assert called == ["serve"]
+
+
+def test_find_repo_root_falls_back_to_working_tree_when_package_path_is_outside_checkout(tmp_path: Path, monkeypatch) -> None:
+    repo_root = tmp_path / "remram-gateway"
+    nested = repo_root / "nested" / "workdir"
+    nested.mkdir(parents=True, exist_ok=True)
+    (repo_root / ".git").mkdir()
+    monkeypatch.delenv("MOLTBOX_REPO_ROOT", raising=False)
+    monkeypatch.chdir(nested)
+
+    resolved = find_repo_root(start=tmp_path / "site-packages" / "moltbox_commands" / "core" / "layout.py")
+
+    assert resolved == repo_root
 
 
 def test_deploy_stack_bootstraps_external_networks(monkeypatch, tmp_path: Path) -> None:

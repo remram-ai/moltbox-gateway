@@ -135,25 +135,68 @@ PY
     return info
 
 
-def require_remote_sudo(ssh_target: str) -> None:
-    completed = _ssh(ssh_target, "sudo -n true")
-    _require(
-        completed,
-        error_message="passwordless sudo is required to prepare machine-scoped storage roots",
-        recovery_message="grant the operator account passwordless sudo for the bootstrap commands or pre-create the appliance directories",
-    )
+def probe_remote_storage_access(ssh_target: str, *, state_root: str, logs_root: str) -> dict[str, str] | None:
+    script = """
+from pathlib import Path
+import json
 
-
-def probe_remote_sudo(ssh_target: str) -> dict[str, str] | None:
-    completed = _ssh(ssh_target, "sudo -n true")
-    if completed.returncode == 0:
+roots = [Path(path) for path in (%s, %s)]
+results = []
+for root in roots:
+    entry = {
+        "path": str(root),
+        "exists": root.exists(),
+        "is_dir": root.is_dir(),
+        "writable": False,
+        "create_parent_writable": False,
+    }
+    if root.exists() and root.is_dir():
+        probe = root / ".moltbox-write-probe"
+        try:
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            entry["writable"] = True
+        except Exception:
+            entry["writable"] = False
+    else:
+        parent = root.parent
+        entry["create_parent_writable"] = parent.exists() and parent.is_dir() and parent.stat().st_mode is not None
+        probe = parent / ".moltbox-parent-write-probe"
+        try:
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            entry["create_parent_writable"] = True
+        except Exception:
+            entry["create_parent_writable"] = False
+    results.append(entry)
+print(json.dumps(results))
+""" % (repr(state_root), repr(logs_root))
+    completed = _ssh_python(ssh_target, script)
+    if completed.returncode != 0:
+        return {
+            "type": "storage",
+            "message": "failed to validate the machine-scoped Moltbox storage roots",
+            "recovery": "verify the remote filesystem permissions for the configured state and logs roots",
+            "stdout": completed.stdout.strip(),
+            "stderr": completed.stderr.strip(),
+        }
+    payload = json.loads(completed.stdout.strip())
+    invalid = [
+        item
+        for item in payload
+        if not (
+            (item["exists"] and item["is_dir"] and item["writable"])
+            or (not item["exists"] and item["create_parent_writable"])
+        )
+    ]
+    if not invalid:
         return None
     return {
-        "type": "sudo",
-        "message": "passwordless sudo is required to prepare machine-scoped storage roots",
-        "recovery": "grant the operator account passwordless sudo for the bootstrap commands or pre-create the appliance directories",
-        "stdout": completed.stdout.strip(),
-        "stderr": completed.stderr.strip(),
+        "type": "storage",
+        "message": "machine-scoped Moltbox storage roots are not writable on the remote host",
+        "recovery": "pre-create the configured state and logs roots with write access for the bootstrap user or grant sudo for directory creation",
+        "stdout": json.dumps(payload),
+        "stderr": json.dumps(invalid),
     }
 
 
@@ -451,20 +494,17 @@ def probe_remote_git_access_with_app(
 
 
 def prepare_remote_storage(ssh_target: str, *, state_root: str, logs_root: str) -> None:
-    command = " && ".join(
-        [
-            f"sudo install -d -o $USER -g $USER {shlex.quote(state_root)}",
-            f"sudo install -d -o $USER -g $USER {shlex.quote(logs_root)}",
-            f"sudo install -d -o $USER -g $USER {shlex.quote(state_root + '/upstream')}",
-            f"sudo install -d -o $USER -g $USER {shlex.quote(state_root + '/repos')}",
-            f"sudo install -d -o $USER -g $USER {shlex.quote(state_root + '/runtime')}",
-        ]
-    )
-    completed = _ssh(ssh_target, command)
+    script = """
+from pathlib import Path
+
+for raw in %r:
+    Path(raw).mkdir(parents=True, exist_ok=True)
+""" % ([state_root, logs_root, f"{state_root}/upstream", f"{state_root}/repos", f"{state_root}/runtime", f"{state_root}/gateway", f"{logs_root}/gateway", f"{logs_root}/services"],)
+    completed = _ssh_python(ssh_target, script)
     _require(
         completed,
         error_message="failed to prepare machine-scoped Moltbox storage roots",
-        recovery_message="verify sudo access and filesystem permissions on the remote host",
+        recovery_message="verify filesystem permissions on the remote host for the configured state and logs roots",
     )
 
 
@@ -643,7 +683,7 @@ def main(argv: list[str] | None = None) -> int:
             private_key_path=args.github_app_private_key_path,
         ),
         probe_remote_git_access(args.host, repo_name="remram-skills", repo_url=args.skills_repo_url),
-        probe_remote_sudo(args.host),
+        probe_remote_storage_access(args.host, state_root=args.state_root, logs_root=args.logs_root),
     ):
         if probe is not None:
             blockers.append(probe)
