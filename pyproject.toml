@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remram-gateway"
+version = "0.4.0"
+description = "Gateway control plane for Moltbox."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PyYAML>=6,<7",
+]
+
+[project.scripts]
+moltbox = "moltbox_cli.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = [
+  "cli/src",
+  "commands/src",
+  "services/src",
+  "runtime/src",
+  "docker/src",
+  "repos/src",
+]
+include = [
+  "moltbox_cli",
+  "moltbox_cli.*",
+  "moltbox_commands",
+  "moltbox_commands.*",
+  "moltbox_services",
+  "moltbox_services.*",
+  "moltbox_runtime",
+  "moltbox_runtime.*",
+  "moltbox_docker",
+  "moltbox_docker.*",
+  "moltbox_repos",
+  "moltbox_repos.*",
+]
