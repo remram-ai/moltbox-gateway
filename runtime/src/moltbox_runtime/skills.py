@@ -49,6 +49,10 @@ def _docker_exec(container_name: str, shell_command: str, *, input_text: str | N
     return _docker("exec", "-i", container_name, "sh", "-lc", shell_command, input_text=input_text)
 
 
+def _docker_exec_as_root(container_name: str, shell_command: str, *, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    return _docker("exec", "-i", "-u", "0", container_name, "sh", "-lc", shell_command, input_text=input_text)
+
+
 def _ensure_success(completed: subprocess.CompletedProcess[str], *, error_message: str, recovery_message: str, **details: Any) -> str:
     if completed.returncode == 0:
         return completed.stdout
@@ -145,7 +149,7 @@ def _resolve_gateway_port(runtime_config: dict[str, Any]) -> int:
 def _copy_package_to_container(container_name: str, package_dir: Path, destination_root: str) -> str:
     package_root = f"{destination_root}/{package_dir.name}"
     _ensure_success(
-        _docker_exec(container_name, f"rm -rf {package_root} && mkdir -p {destination_root}"),
+        _docker_exec_as_root(container_name, f"rm -rf {package_root} && mkdir -p {destination_root}"),
         error_message="failed to prepare the OpenClaw skill staging directory",
         recovery_message="inspect the runtime container filesystem permissions and rerun the skill deployment",
         container=container_name,
@@ -156,6 +160,14 @@ def _copy_package_to_container(container_name: str, package_dir: Path, destinati
         completed,
         error_message="failed to copy the skill package into the OpenClaw container",
         recovery_message="inspect Docker on the host and rerun the skill deployment",
+        container=container_name,
+        package_dir=str(package_dir),
+        staging_root=destination_root,
+    )
+    _ensure_success(
+        _docker_exec_as_root(container_name, f"chown -R node:node {package_root}"),
+        error_message="failed to normalize ownership for the staged OpenClaw skill package",
+        recovery_message="inspect the runtime container filesystem permissions and rerun the skill deployment",
         container=container_name,
         package_dir=str(package_dir),
         staging_root=destination_root,
