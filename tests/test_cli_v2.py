@@ -590,6 +590,8 @@ def test_gateway_update_inside_container_uses_detached_helper(monkeypatch, tmp_p
     assert isinstance(commands, list)
     assert commands[0][:3] == ["docker", "inspect", "gateway"]
     assert commands[1][0] == "docker"
+    assert "docker" in commands[1]
+    assert "compose" in commands[1]
     assert "moltbox-gateway:main" in commands[1]
     assert "--build" in commands[1]
     assert payload["artifact"]["selected_artifact"] == "abc123"

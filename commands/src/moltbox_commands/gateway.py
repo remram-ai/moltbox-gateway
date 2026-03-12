@@ -113,6 +113,7 @@ def _schedule_gateway_self_update(config: Any, *, version: str | None, commit: s
         "-v",
         f"{config.state_root}:{config.state_root}",
         current_image,
+        "docker",
         "compose",
         "-f",
         str(prepared.rendered.compose_file),
