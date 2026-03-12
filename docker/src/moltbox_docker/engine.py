@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 def _run(command: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=str(cwd) if cwd else None, capture_output=True, text=True, check=False)
@@ -89,6 +91,61 @@ def _compose_command(render_dir: Path, compose_project: str, args: list[str]) ->
     ]
 
 
+def _load_compose(render_dir: Path) -> dict[str, Any]:
+    compose_path = render_dir / "compose.yml"
+    loaded = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return loaded
+
+
+def ensure_external_networks(render_dir: Path) -> dict[str, Any]:
+    compose = _load_compose(render_dir)
+    networks = compose.get("networks")
+    if not isinstance(networks, dict):
+        return {"ok": True, "details": {"created": [], "existing": [], "required": []}}
+    created: list[str] = []
+    existing: list[str] = []
+    required: list[str] = []
+    for _, config in networks.items():
+        if not isinstance(config, dict):
+            continue
+        external = config.get("external")
+        if external not in {True, "true", "True"}:
+            continue
+        network_name = str(config.get("name") or "").strip()
+        if not network_name:
+            continue
+        required.append(network_name)
+        inspected = _run(["docker", "network", "inspect", network_name])
+        if inspected.returncode == 0:
+            existing.append(network_name)
+            continue
+        created_result = _run(["docker", "network", "create", network_name])
+        if created_result.returncode != 0:
+            return {
+                "ok": False,
+                "details": {
+                    "created": created,
+                    "existing": existing,
+                    "required": required,
+                    "failed_network": network_name,
+                    "stderr": created_result.stderr.strip(),
+                },
+            }
+        created.append(network_name)
+    return {
+        "ok": True,
+        "details": {
+            "created": created,
+            "existing": existing,
+            "required": required,
+        },
+    }
+
+
 def pull_stack(render_dir: Path, compose_project: str) -> dict[str, Any]:
     if not docker_available():
         return {"ok": False, "details": {"reason": "docker_not_available"}}
@@ -126,6 +183,15 @@ def deploy_stack(
 ) -> dict[str, Any]:
     if not docker_available():
         return {"ok": False, "details": {"reason": "docker_not_available"}}
+    network_bootstrap = ensure_external_networks(render_dir)
+    if not network_bootstrap.get("ok"):
+        return {
+            "ok": False,
+            "details": {
+                "reason": "network_bootstrap_failed",
+                **(network_bootstrap.get("details") or {}),
+            },
+        }
     removed = _remove_existing_containers(container_names) if replace_existing_containers else []
     compose_args = ["up", "-d"]
     if build_images:
@@ -143,6 +209,7 @@ def deploy_stack(
         "stderr": completed.stderr.strip(),
         "details": {
             "compose_command": command,
+            "network_bootstrap": network_bootstrap.get("details"),
             "removed_existing_containers": removed,
             "new_container_ids": (inspect.get("details") or {}).get("container_ids", []),
         },
@@ -165,12 +232,34 @@ def lifecycle(container_names: list[str], action: str) -> dict[str, Any]:
 def validate_containers(container_names: list[str], timeout_seconds: int = 30, poll_interval_seconds: int = 2) -> dict[str, Any]:
     deadline = time.monotonic() + max(timeout_seconds, 0)
     inspected = inspect_containers(container_names)
+    if not inspected.get("ok"):
+        details = inspected.get("details") or {}
+        return {
+            "ok": False,
+            "details": {
+                "containers": [],
+                "result": "fail",
+                "reason": details.get("reason") or "inspect_failed",
+            },
+            "errors": [details.get("reason") or "inspect_failed"],
+        }
     details = inspected.get("details") or {}
     containers = (details.get("container_state") or {}).get("containers") or []
     errors = [item["name"] for item in containers if item["state"] not in {"running", "created"}]
     while errors and time.monotonic() < deadline:
         time.sleep(max(poll_interval_seconds, 0))
         inspected = inspect_containers(container_names)
+        if not inspected.get("ok"):
+            details = inspected.get("details") or {}
+            return {
+                "ok": False,
+                "details": {
+                    "containers": containers,
+                    "result": "fail",
+                    "reason": details.get("reason") or "inspect_failed",
+                },
+                "errors": errors or [details.get("reason") or "inspect_failed"],
+            }
         details = inspected.get("details") or {}
         containers = (details.get("container_state") or {}).get("containers") or []
         errors = [item["name"] for item in containers if item["state"] not in {"running", "created"}]

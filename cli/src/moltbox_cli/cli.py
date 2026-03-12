@@ -9,6 +9,7 @@ from moltbox_commands.core.config import GatewayConfig, resolve_config
 from moltbox_commands.core.errors import GatewayError, ValidationError
 from moltbox_commands.core.jsonio import emit_json
 from moltbox_commands.core.versioning import resolve_version_info
+from . import gateway_server
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,19 @@ def _global_parser() -> argparse.ArgumentParser:
 
 
 def _parse_gateway(args: list[str]) -> GatewayCommand:
+    if not args:
+        raise ValidationError(
+            "gateway commands require a verb",
+            "run `moltbox --help` for the supported gateway commands",
+        )
+    verb = args[0]
+    if verb == "serve":
+        if len(args) > 1:
+            raise ValidationError(
+                "gateway serve does not accept additional arguments",
+                "run `moltbox gateway serve` without extra flags",
+            )
+        return GatewayCommand(verb="serve")
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("verb", choices=["health", "status", "inspect", "logs", "update"])
     parser.add_argument("--version")
@@ -151,12 +165,29 @@ def execute(argv: Sequence[str] | None = None) -> dict[str, object]:
         return {"ok": True, **resolve_version_info().as_dict()}
     if parsed.request is None:
         return {"ok": True, "help": help_text()}
+    if isinstance(parsed.request, GatewayCommand) and parsed.request.verb == "serve":
+        raise ValidationError(
+            "gateway serve must be run through the CLI entrypoint",
+            "run `moltbox gateway serve` directly instead of invoking it through execute()",
+        )
     return dispatch(parsed.config, parsed.request)
 
 
 def run(argv: Sequence[str] | None = None) -> int:
     try:
-        payload = execute(argv)
+        parsed = parse_cli(argv)
+        if isinstance(parsed.request, GatewayCommand) and parsed.request.verb == "serve":
+            return gateway_server.serve(parsed.config)
+        if parsed.show_help:
+            print(help_text())
+            return 0
+        if parsed.show_version:
+            emit_json({"ok": True, **resolve_version_info().as_dict()})
+            return 0
+        if parsed.request is None:
+            print(help_text())
+            return 0
+        payload = dispatch(parsed.config, parsed.request)
     except GatewayError as exc:
         emit_json(exc.to_payload())
         return exc.exit_code
@@ -170,9 +201,6 @@ def run(argv: Sequence[str] | None = None) -> int:
         code = exc.code if isinstance(exc.code, int) else 1
         return code if code != 0 else 1
 
-    if payload.get("help"):
-        print(payload["help"])
-        return 0
     emit_json(payload)
     if payload.get("ok", True):
         return 0

@@ -1,3 +1,5 @@
+# Legacy reference only.
+# Authoritative Caddy runtime config now lives in moltbox-runtime/caddy/.
 :80 {
   respond /healthz 200
 

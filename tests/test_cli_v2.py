@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import json
 from pathlib import Path
 
 from moltbox_cli.cli import execute
 from moltbox_commands.core.config import resolve_config
+from moltbox_docker import engine as docker_engine
+from moltbox_repos import adapters as repo_adapters
 from moltbox_services import pipeline as service_pipeline
 
 from .conftest import create_git_repo, run_cli
@@ -38,6 +42,14 @@ def test_help_lists_v2_namespaces() -> None:
     assert "skill deploy <skill>" in completed.stdout
 
 
+def test_failed_command_returns_nonzero_exit_code() -> None:
+    completed = run_cli("service", "list")
+    assert completed.returncode != 0
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is False
+    assert payload["error_type"] == "config_error"
+
+
 def test_service_list_reads_external_services_repository(tmp_path: Path) -> None:
     services_repo = create_git_repo(
         tmp_path / "moltbox-services",
@@ -58,6 +70,30 @@ def test_service_list_reads_external_services_repository(tmp_path: Path) -> None
     payload = json.loads(completed.stdout)
     service_names = {service["name"] for service in payload["services"]}
     assert {"openclaw-dev", "openclaw-test", "caddy"} == service_names
+
+
+def test_services_repo_checkout_is_serialized_for_parallel_calls(tmp_path: Path, monkeypatch) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/caddy/compose.yml.template": "services:\n  caddy:\n    image: caddy:latest\n",
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+    config = resolve_config(Args())
+
+    def load_services() -> list[str]:
+        return [resource.relative_path for resource in repo_adapters.list_services(config)]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(load_services)
+        second = executor.submit(load_services)
+
+    assert first.result() == ["services/caddy"]
+    assert second.result() == ["services/caddy"]
 
 
 def test_runtime_config_sync_reads_external_runtime_repository(tmp_path: Path, monkeypatch) -> None:
@@ -131,19 +167,42 @@ def test_service_deploy_gateway_uses_clean_service_pipeline(tmp_path: Path, monk
             "services/gateway/compose.yml.template": (
                 "services:\n"
                 "  gateway:\n"
-                "    image: example/gateway:{{ selected_artifact }}\n"
+                "    image: moltbox-gateway:{{ selected_artifact }}\n"
+                "    build:\n"
+                "      context: .\n"
+                "      dockerfile: Dockerfile\n"
+                "      args:\n"
+                "        GATEWAY_GIT_REF: {{ selected_artifact }}\n"
                 "    container_name: {{ container_name }}\n"
             ),
             "services/gateway/service.yaml": (
                 "compose_project: gateway\n"
                 "container_names:\n"
                 "  - gateway\n"
+                "runtime_required: true\n"
+                "build_on_deploy: true\n"
+                "skip_pull: true\n"
+            ),
+            "services/gateway/Dockerfile": "FROM docker:29-cli\n",
+        },
+    )
+    runtime_repo = create_git_repo(
+        tmp_path / "moltbox-runtime",
+        {
+            "gateway/config.yaml": (
+                "paths:\n"
+                "  state_root: /srv/remram/state\n"
+                "  runtime_root: /srv/remram/runtime\n"
+                "gateway:\n"
+                "  host: 0.0.0.0\n"
+                "  port: 7474\n"
             ),
         },
     )
     monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
     monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
     monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
     monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
     resolve_config(Args())
 
@@ -154,7 +213,7 @@ def test_service_deploy_gateway_uses_clean_service_pipeline(tmp_path: Path, monk
     monkeypatch.setattr(
         service_pipeline.docker_engine,
         "deploy_stack",
-        lambda **kwargs: calls.append("deploy") or {"ok": True, "details": {"compose_command": ["docker", "compose"]}},
+        lambda **kwargs: calls.append(f"deploy:{kwargs['build_images']}") or {"ok": True, "details": {"compose_command": ["docker", "compose"]}},
     )
     monkeypatch.setattr(service_pipeline.docker_engine, "validate_containers", lambda names, timeout_seconds=30, poll_interval_seconds=2: calls.append("validate") or {"ok": True, "details": {"result": "pass"}})
 
@@ -163,7 +222,18 @@ def test_service_deploy_gateway_uses_clean_service_pipeline(tmp_path: Path, monk
     assert payload["ok"] is True
     assert payload["resolved_service"] == "gateway"
     assert payload["service_source"]["relative_path"] == "services/gateway"
-    assert calls == ["pull", "deploy", "validate"]
+    assert payload["runtime_source"]["relative_path"] == "gateway"
+    assert calls == ["deploy:True", "validate"]
+
+
+def test_validate_containers_fails_when_docker_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(docker_engine, "docker_available", lambda: False)
+
+    payload = docker_engine.validate_containers(["opensearch"])
+
+    assert payload["ok"] is False
+    assert payload["details"]["result"] == "fail"
+    assert payload["details"]["reason"] == "docker_not_available"
 
 
 def test_service_deploy_opensearch_uses_external_runtime_config(tmp_path: Path, monkeypatch) -> None:
@@ -347,6 +417,38 @@ def test_service_deploy_caddy_uses_external_runtime_config(tmp_path: Path, monke
     assert payload["runtime_source"]["relative_path"] == "caddy"
 
 
+def test_service_inspect_uses_first_class_shared_service_runtime_mapping(tmp_path: Path, monkeypatch) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/caddy/compose.yml.template": "services:\n  caddy:\n    image: caddy:latest\n",
+        },
+    )
+    runtime_repo = create_git_repo(
+        tmp_path / "moltbox-runtime",
+        {
+            "caddy/Caddyfile": ":80 { respond /healthz 200 }\n",
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "inspect_containers",
+        lambda names: {"ok": True, "details": {"container_state": {"containers": []}, "container_ids": []}},
+    )
+
+    payload = execute(["service", "inspect", "caddy"])
+
+    assert payload["ok"] is True
+    assert payload["component"]["runtime_name"] == "caddy"
+    assert payload["runtime_source"]["relative_path"] == "caddy"
+
+
 def test_openclaw_alias_reload_targets_prod(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
     monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
@@ -375,3 +477,130 @@ def test_gateway_update_delegates_to_gateway_service_pipeline(monkeypatch, tmp_p
 
     assert payload["ok"] is True
     assert payload["command"] == "moltbox gateway update"
+
+
+def test_gateway_update_inside_container_uses_detached_helper(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+    monkeypatch.setenv("MOLTBOX_RUNNING_IN_CONTAINER", "1")
+
+    from moltbox_commands import gateway as gateway_commands
+
+    @dataclass(frozen=True)
+    class FakeRendered:
+        compose_project: str
+        compose_file: Path
+        output_dir: Path
+        render_manifest_path: Path
+        metadata: dict[str, object]
+
+    @dataclass(frozen=True)
+    class FakePrepared:
+        artifact: dict[str, object]
+        rendered: FakeRendered
+
+    render_dir = tmp_path / ".remram" / "deploy" / "rendered" / "gateway"
+    render_dir.mkdir(parents=True, exist_ok=True)
+    (render_dir / "compose.yml").write_text("services:\n  gateway:\n    image: moltbox-gateway:main\n", encoding="utf-8")
+    (render_dir / "render-manifest.json").write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(gateway_commands.docker_engine, "docker_available", lambda: True)
+    monkeypatch.setattr(gateway_commands.docker_engine, "ensure_external_networks", lambda render_dir: {"ok": True, "details": {}})
+    monkeypatch.setattr(
+        gateway_commands.service_pipeline,
+        "prepare_service_deployment",
+        lambda config, spec, version=None, commit=None: FakePrepared(
+            artifact={"selected_artifact": commit or "main"},
+            rendered=FakeRendered(
+                compose_project="gateway",
+                compose_file=render_dir / "compose.yml",
+                output_dir=render_dir,
+                render_manifest_path=render_dir / "render-manifest.json",
+                metadata={"build_on_deploy": True},
+            ),
+        ),
+    )
+
+    class Completed:
+        returncode = 0
+        stdout = "helper-123\n"
+        stderr = ""
+
+    captured: dict[str, object] = {}
+    def fake_subprocess_run(command, capture_output, text, check):
+        captured["command"] = command
+        return Completed()
+
+    monkeypatch.setattr(gateway_commands.subprocess, "run", fake_subprocess_run)
+
+    payload = execute(["gateway", "update", "--commit", "abc123"])
+
+    assert payload["ok"] is True
+    assert payload["update_mode"] == "detached_self_update"
+    assert "docker" in str(captured["command"][0])
+    assert "--build" in captured["command"]
+    assert payload["artifact"]["selected_artifact"] == "abc123"
+
+
+def test_gateway_serve_routes_to_gateway_server(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    from moltbox_cli import cli as cli_module
+
+    called: list[str] = []
+    monkeypatch.setattr(cli_module.gateway_server, "serve", lambda config: called.append("serve") or 0)
+
+    assert cli_module.run(["gateway", "serve"]) == 0
+    assert called == ["serve"]
+
+
+def test_deploy_stack_bootstraps_external_networks(monkeypatch, tmp_path: Path) -> None:
+    compose_dir = tmp_path / "render"
+    compose_dir.mkdir(parents=True, exist_ok=True)
+    (compose_dir / "compose.yml").write_text(
+        "services:\n"
+        "  caddy:\n"
+        "    image: caddy:latest\n"
+        "    networks:\n"
+        "      - moltbox_internal\n"
+        "networks:\n"
+        "  moltbox_internal:\n"
+        "    external: true\n"
+        "    name: moltbox_moltbox_internal\n",
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], cwd: Path | None = None):
+        commands.append(command)
+
+        class Completed:
+            def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if command[:4] == ["docker", "network", "inspect", "moltbox_moltbox_internal"]:
+            return Completed(1, stderr="not found")
+        if command[:4] == ["docker", "network", "create", "moltbox_moltbox_internal"]:
+            return Completed(0, stdout="moltbox_moltbox_internal\n")
+        if command[:4] == ["docker", "compose", "-f", str(compose_dir / "compose.yml")]:
+            return Completed(0)
+        if command[:2] == ["docker", "inspect"]:
+            return Completed(0, stdout='[{"Id":"abc","State":{"Status":"running"},"Config":{"Image":"caddy:latest"}}]')
+        return Completed(0)
+
+    monkeypatch.setattr(docker_engine, "docker_available", lambda: True)
+    monkeypatch.setattr(docker_engine, "_run", fake_run)
+
+    payload = docker_engine.deploy_stack(
+        render_dir=compose_dir,
+        compose_project="caddy",
+        container_names=["caddy"],
+    )
+
+    assert payload["ok"] is True
+    assert payload["details"]["network_bootstrap"]["created"] == ["moltbox_moltbox_internal"]

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,37 +59,94 @@ def _require_repo_url(name: str, url: str | None) -> str:
     )
 
 
+@contextmanager
+def _checkout_lock(
+    checkout_dir: Path,
+    *,
+    timeout_seconds: float = 30.0,
+    poll_interval_seconds: float = 0.1,
+    stale_after_seconds: float = 300.0,
+):
+    lock_path = checkout_dir.with_name(f"{checkout_dir.name}.lock")
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    while True:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with lock_path.open("x", encoding="utf-8") as handle:
+                handle.write(f"{os.getpid()}\n")
+            break
+        except FileExistsError:
+            try:
+                age_seconds = time.time() - lock_path.stat().st_mtime
+            except OSError:
+                age_seconds = 0.0
+            if age_seconds >= stale_after_seconds:
+                try:
+                    lock_path.unlink()
+                    continue
+                except OSError:
+                    pass
+            if time.monotonic() >= deadline:
+                raise ConfigError(
+                    f"timed out waiting for the {checkout_dir.name} repository cache lock",
+                    "wait for the in-flight command to finish or remove the stale lock file and rerun the command",
+                    checkout_dir=str(checkout_dir),
+                    lock_path=str(lock_path),
+                )
+            time.sleep(max(poll_interval_seconds, 0))
+    try:
+        yield
+    finally:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+
 def _ensure_checkout(config: GatewayConfig, name: str, url: str | None) -> RepoCheckout:
     resolved_url = _require_repo_url(name, url)
     checkout_dir = config.layout.repos_root / name
-    if not checkout_dir.exists():
-        checkout_dir.parent.mkdir(parents=True, exist_ok=True)
-        cloned = _git("clone", resolved_url, str(checkout_dir))
-        if cloned.returncode != 0:
+    with _checkout_lock(checkout_dir):
+        if not checkout_dir.exists():
+            checkout_dir.parent.mkdir(parents=True, exist_ok=True)
+            temp_checkout_dir = checkout_dir.parent / f".{checkout_dir.name}.clone-{os.getpid()}-{time.time_ns()}"
+            cloned = _git("clone", resolved_url, str(temp_checkout_dir))
+            if cloned.returncode != 0:
+                shutil.rmtree(temp_checkout_dir, ignore_errors=True)
+                raise ConfigError(
+                    f"failed to clone {name} repository",
+                    "verify the repository URL and gateway Git access",
+                    repository=name,
+                    repository_url=resolved_url,
+                    git_stderr=cloned.stderr.strip(),
+                )
+            try:
+                temp_checkout_dir.replace(checkout_dir)
+            except OSError as exc:
+                shutil.rmtree(temp_checkout_dir, ignore_errors=True)
+                raise ConfigError(
+                    f"failed to move the cloned {name} repository into the cache path",
+                    "remove the partially created cache directory and rerun the command",
+                    repository=name,
+                    checkout_dir=str(checkout_dir),
+                ) from exc
+        elif not (checkout_dir / ".git").exists():
             raise ConfigError(
-                f"failed to clone {name} repository",
-                "verify the repository URL and gateway Git access",
-                repository=name,
-                repository_url=resolved_url,
-                git_stderr=cloned.stderr.strip(),
-            )
-    elif not (checkout_dir / ".git").exists():
-        raise ConfigError(
-            f"repository cache path is not a Git checkout: {checkout_dir}",
-            "remove the invalid cache path and rerun the command",
-            repository=name,
-            checkout_dir=str(checkout_dir),
-        )
-    else:
-        pulled = _git("-C", str(checkout_dir), "pull", "--ff-only")
-        if pulled.returncode != 0:
-            raise ConfigError(
-                f"failed to update {name} repository cache",
-                "resolve the Git pull error in the cached checkout and rerun the command",
+                f"repository cache path is not a Git checkout: {checkout_dir}",
+                "remove the invalid cache path and rerun the command",
                 repository=name,
                 checkout_dir=str(checkout_dir),
-                git_stderr=pulled.stderr.strip(),
             )
+        else:
+            pulled = _git("-C", str(checkout_dir), "pull", "--ff-only")
+            if pulled.returncode != 0:
+                raise ConfigError(
+                    f"failed to update {name} repository cache",
+                    "resolve the Git pull error in the cached checkout and rerun the command",
+                    repository=name,
+                    checkout_dir=str(checkout_dir),
+                    git_stderr=pulled.stderr.strip(),
+                )
     head = _git("-C", str(checkout_dir), "rev-parse", "HEAD")
     if head.returncode != 0:
         raise ConfigError(

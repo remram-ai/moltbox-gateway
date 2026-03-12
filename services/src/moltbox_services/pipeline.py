@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,16 @@ from moltbox_docker import engine as docker_engine
 from moltbox_repos import adapters as repo_adapters
 
 from .rendering import render_service
+
+
+@dataclass(frozen=True)
+class PreparedDeployment:
+    spec: ComponentSpec
+    source: Any
+    artifact: dict[str, Any]
+    rendered: Any
+    snapshot: dict[str, Any]
+    paths: dict[str, Path]
 
 
 def gateway_spec() -> ComponentSpec:
@@ -57,6 +68,8 @@ def _resolve_artifact(service_name: str, *, version: str | None, commit: str | N
         "test": "latest_approved",
         "prod": "approved_stable",
     }.get(channel, "repository_default")
+    if service_name == "gateway":
+        selector = "main"
     return {
         "strategy": "environment_default",
         "channel": channel,
@@ -115,6 +128,48 @@ def _snapshot_service(config: GatewayConfig, spec: ComponentSpec) -> dict[str, A
     return {"snapshot_path": str(snapshot_path), "snapshot": snapshot}
 
 
+def _metadata_flag(metadata: dict[str, Any], field_name: str, *, default: bool = False) -> bool:
+    raw = metadata.get(field_name)
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValidationError(
+        f"service metadata field '{field_name}' must be boolean",
+        "rewrite the service metadata and rerun the command",
+        field=field_name,
+        configured_value=raw,
+    )
+
+
+def prepare_service_deployment(
+    config: GatewayConfig,
+    spec: ComponentSpec,
+    *,
+    version: str | None = None,
+    commit: str | None = None,
+) -> PreparedDeployment:
+    source = repo_adapters.service_resource(config, spec.service_name)
+    artifact = _resolve_artifact(spec.canonical_name, version=version, commit=commit)
+    rendered = render_service(config, spec, source, artifact)
+    snapshot = _snapshot_service(config, spec)
+    paths = _state_files(config, spec)
+    return PreparedDeployment(
+        spec=spec,
+        source=source,
+        artifact=artifact,
+        rendered=rendered,
+        snapshot=snapshot,
+        paths=paths,
+    )
+
+
 def list_services(config: GatewayConfig) -> list[dict[str, Any]]:
     services: list[dict[str, Any]] = []
     for resource in repo_adapters.list_services(config):
@@ -170,22 +225,35 @@ def doctor_service(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Any]
 
 
 def deploy_service(config: GatewayConfig, spec: ComponentSpec, *, version: str | None = None, commit: str | None = None) -> dict[str, Any]:
-    source = repo_adapters.service_resource(config, spec.service_name)
-    artifact = _resolve_artifact(spec.canonical_name, version=version, commit=commit)
-    rendered = render_service(config, spec, source, artifact)
-    snapshot = _snapshot_service(config, spec)
-    paths = _state_files(config, spec)
+    prepared = prepare_service_deployment(config, spec, version=version, commit=commit)
+    source = prepared.source
+    artifact = prepared.artifact
+    rendered = prepared.rendered
+    snapshot = prepared.snapshot
+    paths = prepared.paths
+    build_images = _metadata_flag(rendered.metadata, "build_on_deploy", default=False)
+    skip_pull = _metadata_flag(rendered.metadata, "skip_pull", default=build_images)
 
     if paths["last_success"].exists():
         write_json(paths["previous_success"], read_json(paths["last_success"], default={}) or {})
     if paths["active_render"].exists():
         _copy_tree(paths["active_render"], paths["previous_render"])
 
-    pull_result = docker_engine.pull_stack(rendered.output_dir, rendered.compose_project)
+    if skip_pull:
+        pull_result = {
+            "ok": True,
+            "details": {
+                "skipped": True,
+                "reason": "skip_pull",
+            },
+        }
+    else:
+        pull_result = docker_engine.pull_stack(rendered.output_dir, rendered.compose_project)
     deploy_result = docker_engine.deploy_stack(
         render_dir=rendered.output_dir,
         compose_project=rendered.compose_project,
         container_names=rendered.container_names,
+        build_images=build_images,
         replace_existing_containers=True,
     )
     validation_result = docker_engine.validate_containers(rendered.container_names)

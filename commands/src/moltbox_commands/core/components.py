@@ -71,6 +71,29 @@ _COMPONENTS = {
         "compose_project": "openclaw-test",
         "runtime_name": "openclaw-test",
     },
+    "caddy": {
+        "canonical_name": "caddy",
+        "kind": "service",
+        "service_name": "caddy",
+        "container_name": "caddy",
+        "compose_project": "caddy",
+        "runtime_name": "caddy",
+    },
+    "opensearch": {
+        "canonical_name": "opensearch",
+        "kind": "service",
+        "service_name": "opensearch",
+        "container_name": "opensearch",
+        "compose_project": "opensearch",
+        "runtime_name": "opensearch",
+    },
+    "ollama": {
+        "canonical_name": "ollama",
+        "kind": "service",
+        "service_name": "ollama",
+        "container_name": "ollama",
+        "compose_project": "ollama",
+    },
 }
 
 
