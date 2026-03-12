@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
-import socket
 from pathlib import Path
 from typing import Any
 
 from moltbox_commands.core.components import ComponentSpec
 from moltbox_commands.core.config import GatewayConfig
 from moltbox_repos.adapters import runtime_resource
-
 
 def _component_gateway_port(component_name: str, default_port: int) -> int:
     return {
@@ -20,69 +17,135 @@ def _component_gateway_port(component_name: str, default_port: int) -> int:
     }.get(component_name, default_port)
 
 
-def _replace_tree(source: Path, destination: Path) -> None:
-    if destination.exists():
-        shutil.rmtree(destination)
-    shutil.copytree(source, destination)
+def _component_profile(component_name: str) -> str:
+    if component_name.endswith("-dev"):
+        return "dev"
+    if component_name.endswith("-test"):
+        return "test"
+    if component_name.endswith("-prod"):
+        return "prod"
+    return component_name
 
 
-def _resolve_host_ip() -> str:
-    configured = os.environ.get("MOLTBOX_PUBLIC_HOST_IP") or os.environ.get("REMRAM_PUBLIC_HOST_IP")
+def _target_env_value(component_name: str, base_name: str) -> str:
+    profile = _component_profile(component_name).upper()
+    component = component_name.upper().replace("-", "_")
+    for candidate in (f"{base_name}_{profile}", f"{base_name}_{component}", base_name):
+        raw = os.environ.get(candidate)
+        if raw and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _env_bool(component_name: str, base_name: str, *, default: bool = False) -> str:
+    raw = _target_env_value(component_name, base_name)
+    if not raw:
+        return "true" if default else "false"
+    return "true" if raw.lower() in {"1", "true", "yes", "on"} else "false"
+
+
+def _comma_split(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _discord_guilds_block(component_name: str) -> str:
+    guild_id = _target_env_value(component_name, "MOLTBOX_DISCORD_GUILD_ID")
+    if not guild_id:
+        return ""
+
+    require_mention = _env_bool(component_name, "MOLTBOX_DISCORD_REQUIRE_MENTION", default=True)
+    user_ids = _comma_split(_target_env_value(component_name, "MOLTBOX_DISCORD_USER_IDS"))
+    channel_ids = _comma_split(_target_env_value(component_name, "MOLTBOX_DISCORD_CHANNEL_IDS"))
+    single_channel_id = _target_env_value(component_name, "MOLTBOX_DISCORD_CHANNEL_ID")
+    if single_channel_id and single_channel_id not in channel_ids:
+        channel_ids.append(single_channel_id)
+
+    lines = [
+        "    guilds:",
+        f'      "{guild_id}":',
+        f"        requireMention: {require_mention}",
+    ]
+    if user_ids:
+        lines.append("        users:")
+        for user_id in user_ids:
+            lines.append(f'          - "{user_id}"')
+    if channel_ids:
+        lines.append("        channels:")
+        for channel_id in channel_ids:
+            lines.append(f'          "{channel_id}":')
+            lines.append(f"            requireMention: {require_mention}")
+    return "\n".join(lines)
+
+
+def _replace_tokens(text: str, context: dict[str, str]) -> str:
+    rendered = text
+    for key in sorted(context):
+        rendered = rendered.replace(f"{{{{ {key} }}}}", context[key])
+        rendered = rendered.replace(f"{{{{{key}}}}}", context[key])
+    return rendered
+
+
+def _copy_or_render(source: Path, destination: Path, context: dict[str, str]) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.suffix == ".template":
+        destination.with_suffix("").write_text(
+            _replace_tokens(source.read_text(encoding="utf-8"), context),
+            encoding="utf-8",
+        )
+        return
+    destination.write_bytes(source.read_bytes())
+
+
+def _resolve_host_name() -> str:
+    configured = os.environ.get("MOLTBOX_PUBLIC_HOSTNAME") or os.environ.get("REMRAM_PUBLIC_HOSTNAME")
     if configured and configured.strip():
         return configured.strip()
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("1.1.1.1", 80))
-            return sock.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
+    return ""
 
 
-def _seed_openclaw_config(runtime_root: Path, port: int) -> None:
-    config_path = runtime_root / "openclaw.json"
-    if not config_path.exists():
-        return
-    payload = json.loads(config_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        payload = {}
-    gateway = payload.setdefault("gateway", {})
-    if not isinstance(gateway, dict):
-        gateway = {}
-        payload["gateway"] = gateway
-    gateway["mode"] = "local"
-    control_ui = gateway.setdefault("controlUi", {})
-    if not isinstance(control_ui, dict):
-        control_ui = {}
-        gateway["controlUi"] = control_ui
+def _runtime_context(config: GatewayConfig, spec: ComponentSpec) -> dict[str, str]:
+    return {
+        "component_name": spec.canonical_name,
+        "service_name": spec.service_name,
+        "runtime_name": spec.runtime_name or spec.service_name,
+        "profile": _component_profile(spec.canonical_name),
+        "gateway_port": str(_component_gateway_port(spec.canonical_name, config.internal_port)),
+        "internal_host": config.internal_host,
+        "internal_port": str(config.internal_port),
+        "state_root": str(config.state_root),
+        "logs_root": str(config.logs_root),
+        "runtime_root": str(config.runtime_artifacts_root),
+        "runtime_component_dir": str(config.layout.runtime_component_dir(spec.canonical_name)),
+        "public_hostname": _resolve_host_name(),
+        "discord_enabled": _env_bool(spec.canonical_name, "MOLTBOX_DISCORD_ENABLED", default=False),
+        "discord_guilds_block": _discord_guilds_block(spec.canonical_name),
+    }
 
-    merged: list[str] = []
-    existing = control_ui.get("allowedOrigins")
-    if isinstance(existing, list):
-        for item in existing:
-            if isinstance(item, str) and item and item not in merged:
-                merged.append(item)
 
-    for host in ("127.0.0.1", "localhost", _resolve_host_ip()):
-        for scheme in ("http", "https"):
-            for suffix in ("", f":{port}"):
-                value = f"{scheme}://{host}{suffix}"
-                if value not in merged:
-                    merged.append(value)
-    control_ui["allowedOrigins"] = merged
-    config_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+def _render_runtime_tree(source_root: Path, staging_dir: Path, context: dict[str, str]) -> list[str]:
+    rendered_paths: list[str] = []
+    for source in sorted(path for path in source_root.rglob("*") if path.is_file()):
+        relative = source.relative_to(source_root)
+        destination = staging_dir / relative
+        _copy_or_render(source, destination, context)
+        rendered_relative = destination.relative_to(staging_dir)
+        if source.suffix == ".template":
+            rendered_relative = rendered_relative.with_suffix("")
+        rendered_paths.append(str(rendered_relative).replace("\\", "/"))
+    return rendered_paths
 
 
 def sync_component_config(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Any]:
-    source = runtime_resource(config, spec.service_name)
+    source = runtime_resource(config, spec.runtime_name or spec.service_name)
     staging_dir = config.layout.deploy_root / "runtime-sync" / spec.canonical_name
-    destination = config.layout.runtime_component_dir(spec.canonical_name)
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
-    shutil.copytree(source.path, staging_dir)
-    _seed_openclaw_config(staging_dir, _component_gateway_port(spec.canonical_name, config.internal_port))
-    _replace_tree(staging_dir, destination)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    rendered_files = _render_runtime_tree(source.path, staging_dir, _runtime_context(config, spec))
     return {
         "runtime_source": source.as_dict(),
         "staging_dir": str(staging_dir),
-        "runtime_root": str(destination),
+        "runtime_root": str(config.layout.runtime_component_dir(spec.canonical_name)),
+        "rendered_files": sorted(set(rendered_files)),
     }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +120,17 @@ def _state_files(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Path]:
     }
 
 
+def _prepare_runtime_state_root(config: GatewayConfig, spec: ComponentSpec) -> Path:
+    runtime_root = config.layout.runtime_component_dir(spec.canonical_name)
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt" and hasattr(os, "chown"):
+        try:
+            os.chown(runtime_root, 1000, 1000)
+        except OSError:
+            pass
+    return runtime_root
+
+
 def _snapshot_service(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Any]:
     paths = _state_files(config, spec)
     paths["snapshots_dir"].mkdir(parents=True, exist_ok=True)
@@ -225,6 +237,9 @@ def doctor_service(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Any]
 
 
 def deploy_service(config: GatewayConfig, spec: ComponentSpec, *, version: str | None = None, commit: str | None = None) -> dict[str, Any]:
+    if spec.supports_runtime:
+        _prepare_runtime_state_root(config, spec)
+
     prepared = prepare_service_deployment(config, spec, version=version, commit=commit)
     source = prepared.source
     artifact = prepared.artifact

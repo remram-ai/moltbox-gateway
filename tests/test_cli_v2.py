@@ -131,27 +131,104 @@ def test_runtime_config_sync_reads_external_runtime_repository(tmp_path: Path, m
     runtime_repo = create_git_repo(
         tmp_path / "moltbox-runtime",
         {
-            "openclaw-dev/openclaw.json": json.dumps({"gateway": {"controlUi": {"allowedOrigins": []}}}, indent=2) + "\n",
-            "openclaw-dev/model-runtime.yml": "model: qwen3:8b\n",
-            "openclaw-dev/openclaw/channels.yaml": "channels: []\n",
+            "openclaw-dev/openclaw.json.template": (
+                json.dumps({"gateway": {"controlUi": {"allowedOrigins": ["http://127.0.0.1:{{ gateway_port }}"]}}}, indent=2) + "\n"
+            ),
+            "openclaw-dev/channels.yaml.template": "channels:\n  discord:\n    enabled: {{ discord_enabled }}\n",
         },
     )
     monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
     monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
     monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
-    monkeypatch.setenv("MOLTBOX_PUBLIC_HOST_IP", "192.168.1.50")
+    monkeypatch.setenv("MOLTBOX_DISCORD_ENABLED_DEV", "true")
     monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
     resolve_config(Args())
 
     payload = execute(["openclaw-dev", "config", "sync"])
 
     assert payload["ok"] is True
+    staging_dir = Path(str(payload["staging_dir"]))
     runtime_root = Path(str(payload["runtime_root"]))
-    synced = json.loads((runtime_root / "openclaw.json").read_text(encoding="utf-8"))
+    synced = json.loads((staging_dir / "openclaw.json").read_text(encoding="utf-8"))
     allowed_origins = synced["gateway"]["controlUi"]["allowedOrigins"]
     assert "http://127.0.0.1:18790" in allowed_origins
-    assert "http://192.168.1.50:18790" in allowed_origins
-    assert (runtime_root / "openclaw" / "channels.yaml").exists()
+    assert (staging_dir / "channels.yaml").read_text(encoding="utf-8").strip().endswith("enabled: true")
+    assert not (runtime_root / "openclaw.json").exists()
+
+
+def test_runtime_config_sync_renders_templates_without_touching_runtime_state(tmp_path: Path, monkeypatch) -> None:
+    runtime_repo = create_git_repo(
+        tmp_path / "moltbox-runtime",
+        {
+            "openclaw-dev/openclaw.json.template": (
+                json.dumps(
+                    {
+                        "gateway": {
+                            "controlUi": {
+                                "allowedOrigins": ["http://127.0.0.1:{{ gateway_port }}"],
+                                "dangerouslyAllowHostHeaderOriginFallback": True,
+                            }
+                        },
+                        "plugins": {"enabled": True},
+                    },
+                    indent=2,
+                )
+                + "\n"
+            ),
+            "openclaw-dev/channels.yaml.template": (
+                "channels:\n"
+                "  discord:\n"
+                "    enabled: {{ discord_enabled }}\n"
+                "{{ discord_guilds_block }}\n"
+            ),
+        },
+    )
+    runtime_root = tmp_path / "Moltbox" / "openclaw-dev"
+    (runtime_root / "workspace").mkdir(parents=True, exist_ok=True)
+    (runtime_root / "credentials").mkdir(parents=True, exist_ok=True)
+    (runtime_root / "workspace" / "notes.txt").write_text("keep\n", encoding="utf-8")
+    (runtime_root / "credentials" / "token.txt").write_text("keep\n", encoding="utf-8")
+    (runtime_root / "openclaw.json").write_text(
+        json.dumps(
+            {
+                "gateway": {
+                    "auth": {"token": "existing-token"},
+                    "controlUi": {"allowedOrigins": ["https://already.example"]},
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
+    monkeypatch.setenv("MOLTBOX_PUBLIC_HOST_IP", "192.168.1.50")
+    monkeypatch.setenv("MOLTBOX_PUBLIC_HOSTNAME", "moltbox-lab")
+    monkeypatch.setenv("MOLTBOX_DISCORD_ENABLED_DEV", "true")
+    monkeypatch.setenv("MOLTBOX_DISCORD_GUILD_ID_DEV", "1481179628323340393")
+    monkeypatch.setenv("MOLTBOX_DISCORD_CHANNEL_ID_DEV", "1481180067580219402")
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+    resolve_config(Args())
+
+    payload = execute(["openclaw-dev", "config", "sync"])
+
+    assert payload["ok"] is True
+    staging_dir = Path(str(payload["staging_dir"]))
+    synced = json.loads((staging_dir / "openclaw.json").read_text(encoding="utf-8"))
+    allowed_origins = synced["gateway"]["controlUi"]["allowedOrigins"]
+    assert "http://127.0.0.1:18790" in allowed_origins
+    channels_text = (staging_dir / "channels.yaml").read_text(encoding="utf-8")
+    assert "enabled: true" in channels_text
+    assert '"1481179628323340393"' in channels_text
+    assert '"1481180067580219402"' in channels_text
+    preserved = json.loads((runtime_root / "openclaw.json").read_text(encoding="utf-8"))
+    assert preserved["gateway"]["auth"]["token"] == "existing-token"
+    assert "https://already.example" in preserved["gateway"]["controlUi"]["allowedOrigins"]
+    assert (runtime_root / "workspace" / "notes.txt").read_text(encoding="utf-8") == "keep\n"
+    assert (runtime_root / "credentials" / "token.txt").read_text(encoding="utf-8") == "keep\n"
 
 
 def test_skill_deploy_uses_skill_recipe_plan(tmp_path: Path, monkeypatch) -> None:
@@ -290,6 +367,90 @@ def test_service_deploy_gateway_uses_clean_service_pipeline(tmp_path: Path, monk
     assert payload["service_source"]["relative_path"] == "services/gateway"
     assert payload["runtime_source"]["relative_path"] == "gateway"
     assert calls == ["deploy:True", "validate"]
+
+
+def test_service_deploy_runtime_mounts_rendered_config_and_prepares_state_root(tmp_path: Path, monkeypatch) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/openclaw-dev/compose.yml.template": (
+                "services:\n"
+                "  openclaw-dev:\n"
+                "    image: ghcr.io/openclaw/openclaw:latest\n"
+                "    container_name: \"{{ container_name }}\"\n"
+                "    environment:\n"
+                "      OPENCLAW_CONFIG_DIR: /app/config/openclaw\n"
+                "    ports:\n"
+                "      - \"{{ gateway_port }}:18789\"\n"
+                "    volumes:\n"
+                "      - \"{{ runtime_component_dir }}:/home/node/.openclaw\"\n"
+                "      - \"./config/{{ service_name }}:/app/config/openclaw:ro\"\n"
+                "    command:\n"
+                "      - sh\n"
+                "      - -lc\n"
+                "      - >\n"
+                "        mkdir -p /home/node/.openclaw &&\n"
+                "        if [ ! -f /home/node/.openclaw/openclaw.json ]; then cp /app/config/openclaw/openclaw.json /home/node/.openclaw/openclaw.json; fi &&\n"
+                "        exec node dist/index.js gateway --bind lan --port 18789\n"
+            ),
+            "services/openclaw-dev/service.yaml": (
+                "compose_project: openclaw-dev\n"
+                "container_names:\n"
+                "  - openclaw-dev\n"
+                "runtime_required: true\n"
+            ),
+        },
+    )
+    runtime_repo = create_git_repo(
+        tmp_path / "moltbox-runtime",
+        {
+            "openclaw-dev/openclaw.json.template": json.dumps({"gateway": {"controlUi": {"allowedOrigins": []}}}, indent=2) + "\n",
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
+    monkeypatch.setenv("MOLTBOX_PUBLIC_HOST_IP", "192.168.1.50")
+    monkeypatch.setenv("MOLTBOX_DISCORD_ENABLED_DEV", "true")
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+    config = resolve_config(Args())
+    runtime_root = config.layout.runtime_component_dir("openclaw-dev")
+
+    monkeypatch.setattr(service_pipeline.docker_engine, "docker_available", lambda: True)
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "inspect_containers",
+        lambda names: {"ok": True, "details": {"container_state": {"containers": []}, "container_ids": []}},
+    )
+
+    def fake_pull(render_dir: Path, compose_project: str) -> dict[str, object]:
+        compose_text = (render_dir / "compose.yml").read_text(encoding="utf-8")
+        assert compose_project == "openclaw-dev"
+        assert '"18790:18789"' in compose_text
+        assert str(runtime_root).replace("\\", "/") in compose_text.replace("\\", "/")
+        assert './config/openclaw-dev:/app/config/openclaw:ro' in compose_text
+        assert "OPENCLAW_CONFIG_DIR: /app/config/openclaw" in compose_text
+        assert "cp /app/config/openclaw/openclaw.json /home/node/.openclaw/openclaw.json" in compose_text
+        assert (render_dir / "config" / "openclaw-dev" / "openclaw.json").exists()
+        return {"ok": True}
+
+    monkeypatch.setattr(service_pipeline.docker_engine, "pull_stack", fake_pull)
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "deploy_stack",
+        lambda **kwargs: {"ok": True, "details": {"compose_command": ["docker", "compose"]}},
+    )
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "validate_containers",
+        lambda names, timeout_seconds=30, poll_interval_seconds=2: {"ok": True, "details": {"result": "pass"}},
+    )
+
+    payload = execute(["service", "deploy", "openclaw-dev"])
+
+    assert payload["ok"] is True
+    assert payload["runtime_source"]["relative_path"] == "openclaw-dev"
 
 
 def test_validate_containers_fails_when_docker_is_unavailable(monkeypatch) -> None:

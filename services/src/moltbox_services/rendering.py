@@ -156,6 +156,24 @@ def _public_host_suffix(subdomain: str, hostname: str) -> str:
     return f", {subdomain}.{hostname}"
 
 
+def _component_gateway_port(component_name: str, default_port: int) -> int:
+    return {
+        "openclaw-dev": 18790,
+        "openclaw-test": 28789,
+        "openclaw-prod": 38789,
+    }.get(component_name, default_port)
+
+
+def _component_profile(component_name: str) -> str:
+    if component_name.endswith("-dev"):
+        return "dev"
+    if component_name.endswith("-test"):
+        return "test"
+    if component_name.endswith("-prod"):
+        return "prod"
+    return component_name
+
+
 def _service_runtime_source(config: GatewayConfig, spec: ComponentSpec, *, required: bool) -> RepoResource | None:
     runtime_name = spec.runtime_name or spec.service_name
     if not runtime_name:
@@ -208,6 +226,7 @@ def render_service(
     context = {
         "service_name": spec.canonical_name,
         "component_name": spec.canonical_name,
+        "profile": _component_profile(spec.canonical_name),
         "container_name": container_names[0],
         "compose_project": compose_project,
         "state_root": str(config.state_root),
@@ -219,6 +238,7 @@ def render_service(
         "internal_network_name": "moltbox_moltbox_internal",
         "internal_host": config.internal_host,
         "internal_port": str(config.internal_port),
+        "gateway_port": str(_component_gateway_port(spec.canonical_name, config.internal_port)),
         "gateway_container_name": "gateway",
         "gateway_container_port": str(config.internal_port),
         "public_hostname": public_hostname,
