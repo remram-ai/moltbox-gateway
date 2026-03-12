@@ -1,5 +1,6 @@
 moltbox/debug-service/.venv/
 moltbox/debug-service/src/*.egg-info/
+*.egg-info/
 moltbox/debug-service/src/**/__pycache__/
 **/__pycache__/
 .pytest_cache/

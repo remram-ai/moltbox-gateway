@@ -166,6 +166,187 @@ def test_service_deploy_gateway_uses_clean_service_pipeline(tmp_path: Path, monk
     assert calls == ["pull", "deploy", "validate"]
 
 
+def test_service_deploy_opensearch_uses_external_runtime_config(tmp_path: Path, monkeypatch) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/opensearch/compose.yml.template": (
+                "services:\n"
+                "  opensearch:\n"
+                "    image: \"${OPENSEARCH_IMAGE:-moltbox-opensearch:local}\"\n"
+                "    build:\n"
+                "      context: .\n"
+                "      dockerfile: Dockerfile\n"
+                "      args:\n"
+                "        OPENSEARCH_BASE_IMAGE: \"${OPENSEARCH_BASE_IMAGE:-opensearchproject/opensearch:2.18.0}\"\n"
+                "    container_name: \"{{ container_name }}\"\n"
+                "    env_file:\n"
+                "      - \"./config/opensearch/.env\"\n"
+                "      - \"./config/opensearch/container.env\"\n"
+                "    volumes:\n"
+                "      - \"./config/opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro\"\n"
+                "    networks:\n"
+                "      - moltbox_internal\n\n"
+                "networks:\n"
+                "  moltbox_internal:\n"
+                "    external: true\n"
+                "    name: \"{{ internal_network_name }}\"\n"
+            ),
+            "services/opensearch/Dockerfile": (
+                "ARG OPENSEARCH_BASE_IMAGE=opensearchproject/opensearch:2.18.0\n"
+                "FROM ${OPENSEARCH_BASE_IMAGE}\n"
+            ),
+            "services/opensearch/service.yaml": (
+                "compose_project: opensearch\n"
+                "container_names:\n"
+                "  - opensearch\n"
+                "runtime_required: true\n"
+            ),
+        },
+    )
+    runtime_repo = create_git_repo(
+        tmp_path / "moltbox-runtime",
+        {
+            "opensearch/.env": "OPENSEARCH_ENV=1\n",
+            "opensearch/container.env": "DISCOVERY_TYPE=single-node\n",
+            "opensearch/opensearch.yml": "cluster.name: remram-moltbox\n",
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+    resolve_config(Args())
+
+    monkeypatch.setattr(service_pipeline.docker_engine, "docker_available", lambda: True)
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "inspect_containers",
+        lambda names: {"ok": True, "details": {"container_state": {"containers": []}, "container_ids": []}},
+    )
+
+    def fake_pull(render_dir: Path, compose_project: str) -> dict[str, object]:
+        assert compose_project == "opensearch"
+        compose_text = (render_dir / "compose.yml").read_text(encoding="utf-8")
+        assert 'name: "moltbox_moltbox_internal"' in compose_text
+        assert (render_dir / "config" / "opensearch" / ".env").exists()
+        assert (render_dir / "config" / "opensearch" / "container.env").exists()
+        assert (render_dir / "config" / "opensearch" / "opensearch.yml").exists()
+        return {"ok": True}
+
+    monkeypatch.setattr(service_pipeline.docker_engine, "pull_stack", fake_pull)
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "deploy_stack",
+        lambda **kwargs: {"ok": True, "details": {"compose_command": ["docker", "compose"]}},
+    )
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "validate_containers",
+        lambda names, timeout_seconds=30, poll_interval_seconds=2: {"ok": True, "details": {"result": "pass"}},
+    )
+
+    payload = execute(["service", "deploy", "opensearch"])
+
+    assert payload["ok"] is True
+    assert payload["runtime_source"]["relative_path"] == "opensearch"
+    manifest = json.loads(Path(payload["render"]["render_manifest_path"]).read_text(encoding="utf-8"))
+    runtime_source_paths = {Path(path).name for path in manifest["runtime_source_paths"]}
+    assert runtime_source_paths == {".env", "container.env", "opensearch.yml"}
+
+
+def test_service_deploy_caddy_uses_external_runtime_config(tmp_path: Path, monkeypatch) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/caddy/compose.yml.template": (
+                "services:\n"
+                "  caddy:\n"
+                "    image: \"${CADDY_IMAGE:-caddy:2.8.4}\"\n"
+                "    container_name: \"{{ container_name }}\"\n"
+                "    volumes:\n"
+                "      - \"./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro\"\n"
+                "      - \"{{ shared_root }}/data:/data\"\n"
+                "      - \"{{ shared_root }}/config:/config\"\n"
+            ),
+            "services/caddy/service.yaml": (
+                "compose_project: caddy\n"
+                "container_names:\n"
+                "  - caddy\n"
+                "runtime_required: true\n"
+            ),
+        },
+    )
+    runtime_repo = create_git_repo(
+        tmp_path / "moltbox-runtime",
+        {
+            "caddy/Caddyfile.template": (
+                ":80 {\n"
+                "  respond /healthz 200\n\n"
+                "  @cli host moltbox-cli\n"
+                "  handle @cli {\n"
+                "    reverse_proxy host.docker.internal:{{ internal_port }}\n"
+                "  }\n\n"
+                "  @dev host moltbox-dev{{ dev_public_host }}\n"
+                "  handle @dev {\n"
+                "    reverse_proxy host.docker.internal:18790\n"
+                "  }\n\n"
+                "  @test host moltbox-test{{ test_public_host }}\n"
+                "  handle @test {\n"
+                "    reverse_proxy host.docker.internal:28789\n"
+                "  }\n\n"
+                "  @prod host moltbox-prod{{ prod_public_host }}\n"
+                "  handle @prod {\n"
+                "    reverse_proxy host.docker.internal:38789\n"
+                "  }\n"
+                "}\n"
+            ),
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
+    monkeypatch.setenv("MOLTBOX_PUBLIC_HOSTNAME", "moltbox-lab")
+    monkeypatch.setenv("MOLTBOX_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
+    resolve_config(Args())
+
+    monkeypatch.setattr(service_pipeline.docker_engine, "docker_available", lambda: True)
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "inspect_containers",
+        lambda names: {"ok": True, "details": {"container_state": {"containers": []}, "container_ids": []}},
+    )
+
+    def fake_pull(render_dir: Path, compose_project: str) -> dict[str, object]:
+        assert compose_project == "caddy"
+        caddyfile = (render_dir / "config" / "caddy" / "Caddyfile").read_text(encoding="utf-8")
+        assert "reverse_proxy host.docker.internal:7474" in caddyfile
+        assert "reverse_proxy host.docker.internal:18790" in caddyfile
+        assert "dev.moltbox-lab" in caddyfile
+        assert "test.moltbox-lab" in caddyfile
+        assert "prod.moltbox-lab" in caddyfile
+        return {"ok": True}
+
+    monkeypatch.setattr(service_pipeline.docker_engine, "pull_stack", fake_pull)
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "deploy_stack",
+        lambda **kwargs: {"ok": True, "details": {"compose_command": ["docker", "compose"]}},
+    )
+    monkeypatch.setattr(
+        service_pipeline.docker_engine,
+        "validate_containers",
+        lambda names, timeout_seconds=30, poll_interval_seconds=2: {"ok": True, "details": {"result": "pass"}},
+    )
+
+    payload = execute(["service", "deploy", "caddy"])
+
+    assert payload["ok"] is True
+    assert payload["runtime_source"]["relative_path"] == "caddy"
+
+
 def test_openclaw_alias_reload_targets_prod(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
     monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))

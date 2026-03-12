@@ -81,6 +81,18 @@ def _safe_service_source(config: GatewayConfig, spec: ComponentSpec) -> dict[str
         return None
 
 
+def _safe_runtime_source(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Any] | None:
+    if not config.runtime_repo_url:
+        return None
+    runtime_name = spec.runtime_name or spec.service_name
+    if not runtime_name:
+        return None
+    try:
+        return repo_adapters.runtime_resource(config, runtime_name).as_dict()
+    except Exception:
+        return None
+
+
 def _state_files(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Path]:
     state_dir = config.layout.service_state_dir(spec.canonical_name)
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -129,6 +141,7 @@ def inspect_service(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Any
     payload = status_service(config, spec)
     payload["deployment_state"] = read_json(_state_files(config, spec)["last_success"], default={}) or {}
     payload["service_source"] = _safe_service_source(config, spec)
+    payload["runtime_source"] = _safe_runtime_source(config, spec)
     return payload
 
 
@@ -150,6 +163,7 @@ def doctor_service(config: GatewayConfig, spec: ComponentSpec) -> dict[str, Any]
     return {
         "service": spec.canonical_name,
         "service_source": _safe_service_source(config, spec),
+        "runtime_source": _safe_runtime_source(config, spec),
         "status": docker_engine.inspect_containers([spec.container_name]),
         "validation": docker_engine.validate_containers([spec.container_name], timeout_seconds=2, poll_interval_seconds=1),
     }
@@ -196,6 +210,7 @@ def deploy_service(config: GatewayConfig, spec: ComponentSpec, *, version: str |
             "service": spec.canonical_name,
             "artifact": artifact,
             "service_source": source.as_dict(),
+            "runtime_source": rendered.runtime_source,
             "render": {
                 "output_dir": str(rendered.output_dir),
                 "compose_file": str(rendered.compose_file),
@@ -224,6 +239,7 @@ def deploy_service(config: GatewayConfig, spec: ComponentSpec, *, version: str |
         "service": spec.canonical_name,
         "artifact": artifact,
         "service_source": source.as_dict(),
+        "runtime_source": rendered.runtime_source,
         "render": {
             "output_dir": str(rendered.output_dir),
             "compose_file": str(rendered.compose_file),

@@ -172,6 +172,8 @@ def run(argv: Sequence[str] | None = None) -> int:
 
     if payload.get("help"):
         print(payload["help"])
-    else:
-        emit_json(payload)
-    return 0
+        return 0
+    emit_json(payload)
+    if payload.get("ok", True):
+        return 0
+    return int(payload.get("exit_code", 1) or 1)
