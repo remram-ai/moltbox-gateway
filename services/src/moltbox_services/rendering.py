@@ -219,6 +219,8 @@ def render_service(
         "internal_network_name": "moltbox_moltbox_internal",
         "internal_host": config.internal_host,
         "internal_port": str(config.internal_port),
+        "gateway_container_name": "gateway",
+        "gateway_container_port": str(config.internal_port),
         "public_hostname": public_hostname,
         "dev_public_host": _public_host_suffix("dev", public_hostname),
         "test_public_host": _public_host_suffix("test", public_hostname),

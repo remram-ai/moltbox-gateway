@@ -366,10 +366,18 @@ def test_service_deploy_caddy_uses_external_runtime_config(tmp_path: Path, monke
                 "  caddy:\n"
                 "    image: \"${CADDY_IMAGE:-caddy:2.8.4}\"\n"
                 "    container_name: \"{{ container_name }}\"\n"
+                "    extra_hosts:\n"
+                "      - \"host.docker.internal:host-gateway\"\n"
                 "    volumes:\n"
                 "      - \"./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro\"\n"
                 "      - \"{{ shared_root }}/data:/data\"\n"
                 "      - \"{{ shared_root }}/config:/config\"\n"
+                "    networks:\n"
+                "      - moltbox_internal\n"
+                "networks:\n"
+                "  moltbox_internal:\n"
+                "    external: true\n"
+                "    name: \"{{ internal_network_name }}\"\n"
             ),
             "services/caddy/service.yaml": (
                 "compose_project: caddy\n"
@@ -387,7 +395,7 @@ def test_service_deploy_caddy_uses_external_runtime_config(tmp_path: Path, monke
                 "  respond /healthz 200\n\n"
                 "  @cli host moltbox-cli\n"
                 "  handle @cli {\n"
-                "    reverse_proxy host.docker.internal:{{ internal_port }}\n"
+                "    reverse_proxy {{ gateway_container_name }}:{{ gateway_container_port }}\n"
                 "  }\n\n"
                 "  @dev host moltbox-dev{{ dev_public_host }}\n"
                 "  handle @dev {\n"
@@ -423,7 +431,10 @@ def test_service_deploy_caddy_uses_external_runtime_config(tmp_path: Path, monke
     def fake_pull(render_dir: Path, compose_project: str) -> dict[str, object]:
         assert compose_project == "caddy"
         caddyfile = (render_dir / "config" / "caddy" / "Caddyfile").read_text(encoding="utf-8")
-        assert "reverse_proxy host.docker.internal:7474" in caddyfile
+        compose_text = (render_dir / "compose.yml").read_text(encoding="utf-8")
+        assert 'name: "moltbox_moltbox_internal"' in compose_text
+        assert "host.docker.internal:host-gateway" in compose_text
+        assert "reverse_proxy gateway:7474" in caddyfile
         assert "reverse_proxy host.docker.internal:18790" in caddyfile
         assert "dev.moltbox-lab" in caddyfile
         assert "test.moltbox-lab" in caddyfile
