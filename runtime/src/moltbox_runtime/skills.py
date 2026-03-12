@@ -284,17 +284,22 @@ def deploy_plugin_backed_skill(config: GatewayConfig, *, skill_name: str, packag
     runtime_config_path = "/home/node/.openclaw/openclaw.json"
     runtime_config = _read_container_json(container_name, runtime_config_path)
     gateway_port = _resolve_gateway_port(runtime_config)
-    staged_package_dir = _copy_package_to_container(container_name, package_dir, "/tmp/moltbox-skills")
+    staged_package_dir = _copy_package_to_container(container_name, package_dir, "/home/node/.openclaw/extensions")
 
     install_completed = _docker_exec(container_name, f"openclaw plugins install -l {staged_package_dir}")
-    _ensure_success(
-        install_completed,
-        error_message="failed to install the plugin-backed skill into OpenClaw",
-        recovery_message="inspect the OpenClaw plugin install output and rerun the skill deployment",
-        container=container_name,
-        plugin_id=plugin_id,
-        package_dir=str(package_dir),
-    )
+    installed_plugin_info_completed = _docker_exec(container_name, f"openclaw plugins info {plugin_id} --json")
+    if install_completed.returncode != 0 and installed_plugin_info_completed.returncode != 0:
+        raise ConfigError(
+            "failed to install the plugin-backed skill into OpenClaw",
+            "inspect the OpenClaw plugin install output and rerun the skill deployment",
+            container=container_name,
+            plugin_id=plugin_id,
+            package_dir=str(package_dir),
+            install_stdout=install_completed.stdout.strip(),
+            install_stderr=install_completed.stderr.strip(),
+            plugin_info_stdout=installed_plugin_info_completed.stdout.strip(),
+            plugin_info_stderr=installed_plugin_info_completed.stderr.strip(),
+        )
 
     overlay = _load_overlay(package_dir, gateway_port)
     merged_config = _apply_plugin_config(runtime_config, plugin_id=plugin_id, overlay=overlay)
@@ -307,20 +312,9 @@ def deploy_plugin_backed_skill(config: GatewayConfig, *, skill_name: str, packag
         path=runtime_config_path,
     )
     _write_container_json(container_name, runtime_config_path, merged_config)
-    enable_completed = _docker_exec(container_name, f"openclaw plugins enable {plugin_id}")
-    _ensure_success(
-        enable_completed,
-        error_message="failed to enable the installed OpenClaw plugin",
-        recovery_message="inspect the OpenClaw plugin config and rerun the skill deployment",
-        container=container_name,
-        plugin_id=plugin_id,
-    )
     restart_result = _restart_container(container_name)
 
-    doctor = _parse_json_output(
-        "openclaw plugins doctor --json",
-        _docker_exec(container_name, "openclaw plugins doctor --json"),
-    )
+    doctor_completed = _docker_exec(container_name, "openclaw plugins doctor")
     plugin_info = _parse_json_output(
         f"openclaw plugins info {plugin_id} --json",
         _docker_exec(container_name, f"openclaw plugins info {plugin_id} --json"),
@@ -347,7 +341,11 @@ def deploy_plugin_backed_skill(config: GatewayConfig, *, skill_name: str, packag
         },
         "restart": restart_result,
         "validation": {
-            "doctor": doctor,
+            "doctor": {
+                "ok": doctor_completed.returncode == 0,
+                "stdout": doctor_completed.stdout.strip(),
+                "stderr": doctor_completed.stderr.strip(),
+            },
             "plugin_info": plugin_info,
             "skill_info": skill_info,
         },
