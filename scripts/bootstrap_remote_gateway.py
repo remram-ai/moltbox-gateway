@@ -42,7 +42,7 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _ssh(ssh_target: str, remote_command: str) -> subprocess.CompletedProcess[str]:
-    return _run(["ssh", ssh_target, "bash", "-lc", remote_command])
+    return _run(["ssh", ssh_target, f"bash -lc {shlex.quote(remote_command)}"])
 
 
 def _require(completed: subprocess.CompletedProcess[str], *, error_message: str, recovery_message: str) -> str:
@@ -131,6 +131,19 @@ def require_remote_sudo(ssh_target: str) -> None:
     )
 
 
+def probe_remote_sudo(ssh_target: str) -> dict[str, str] | None:
+    completed = _ssh(ssh_target, "sudo -n true")
+    if completed.returncode == 0:
+        return None
+    return {
+        "type": "sudo",
+        "message": "passwordless sudo is required to prepare machine-scoped storage roots",
+        "recovery": "grant the operator account passwordless sudo for the bootstrap commands or pre-create the appliance directories",
+        "stdout": completed.stdout.strip(),
+        "stderr": completed.stderr.strip(),
+    }
+
+
 def require_remote_git_access(ssh_target: str, *, repo_name: str, repo_url: str) -> None:
     completed = _ssh(ssh_target, f"git ls-remote {shlex.quote(repo_url)} HEAD")
     _require(
@@ -138,6 +151,21 @@ def require_remote_git_access(ssh_target: str, *, repo_name: str, repo_url: str)
         error_message=f"remote host cannot read the required Git repository '{repo_name}'",
         recovery_message="configure host-side Git credentials for the private repositories before retrying bootstrap",
     )
+
+
+def probe_remote_git_access(ssh_target: str, *, repo_name: str, repo_url: str) -> dict[str, str] | None:
+    completed = _ssh(ssh_target, f"git ls-remote {shlex.quote(repo_url)} HEAD")
+    if completed.returncode == 0:
+        return None
+    return {
+        "type": "git_access",
+        "repository": repo_name,
+        "repository_url": repo_url,
+        "message": f"remote host cannot read the required Git repository '{repo_name}'",
+        "recovery": "configure host-side Git credentials for the private repositories before retrying bootstrap",
+        "stdout": completed.stdout.strip(),
+        "stderr": completed.stderr.strip(),
+    }
 
 
 def prepare_remote_storage(ssh_target: str, *, state_root: str, logs_root: str) -> None:
@@ -257,12 +285,29 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     host = detect_remote_host(args.host)
-    require_remote_sudo(args.host)
-
-    require_remote_git_access(args.host, repo_name="remram-gateway", repo_url=args.gateway_repo_url)
-    require_remote_git_access(args.host, repo_name="moltbox-services", repo_url=args.services_repo_url)
-    require_remote_git_access(args.host, repo_name="moltbox-runtime", repo_url=args.runtime_repo_url)
-    require_remote_git_access(args.host, repo_name="remram-skills", repo_url=args.skills_repo_url)
+    blockers: list[dict[str, str]] = []
+    for probe in (
+        probe_remote_git_access(args.host, repo_name="remram-gateway", repo_url=args.gateway_repo_url),
+        probe_remote_git_access(args.host, repo_name="moltbox-services", repo_url=args.services_repo_url),
+        probe_remote_git_access(args.host, repo_name="moltbox-runtime", repo_url=args.runtime_repo_url),
+        probe_remote_git_access(args.host, repo_name="remram-skills", repo_url=args.skills_repo_url),
+        probe_remote_sudo(args.host),
+    ):
+        if probe is not None:
+            blockers.append(probe)
+    if blockers:
+        raise SystemExit(
+            json.dumps(
+                {
+                    "ok": False,
+                    "host": host.as_dict(),
+                    "state_root": args.state_root,
+                    "logs_root": args.logs_root,
+                    "blockers": blockers,
+                },
+                indent=2,
+            )
+        )
 
     prepare_remote_storage(args.host, state_root=args.state_root, logs_root=args.logs_root)
 
