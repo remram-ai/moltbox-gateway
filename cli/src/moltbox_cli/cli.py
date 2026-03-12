@@ -51,6 +51,7 @@ def _global_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--config-path")
     parser.add_argument("--state-root")
+    parser.add_argument("--logs-root")
     parser.add_argument("--runtime-artifacts-root")
     parser.add_argument("--services-repo-url")
     parser.add_argument("--runtime-repo-url")

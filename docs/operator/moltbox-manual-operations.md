@@ -2,12 +2,23 @@
 
 This document is a practical operator note for the current Moltbox host. It is based on the checked-in `main` branch plus live host verification on `moltbox-prime` on March 10, 2026.
 
+Normalization note:
+
+- current live host state still uses legacy user-home paths such as `/home/jpekovitch/.remram` and `/home/jpekovitch/Moltbox`
+- target appliance layout is machine-scoped and Linux-first
+- canonical roots going forward are:
+  - state: `/srv/moltbox-state`
+  - logs: `/srv/moltbox-logs`
+- bootstrap and deploy flows should remain Git-backed through the private repositories checked out on the host
+- Windows-host assumptions are out of scope
+
 For command syntax and verb coverage, see [moltbox-cli-reference.md](/D:/Development/RemRam/remram-gateway/docs/operator/moltbox-cli-reference.md).
 
 ## Host Identity
 
 - SSH alias: `moltbox`
 - Hostname: `moltbox-prime`
+- Host OS: Ubuntu 24.04.4 LTS (Noble)
 - Primary LAN IP: `192.168.1.189`
 
 Connect with:

@@ -10,19 +10,25 @@ class GatewayLayout:
     repo_root: Path
     state_root: Path
     deploy_root: Path
+    upstream_root: Path
     repos_root: Path
     runtime_root: Path
     logs_root: Path
     service_state_root: Path
+    gateway_state_root: Path
+    gateway_logs_root: Path
 
     def ensure(self) -> "GatewayLayout":
         for path in (
             self.state_root,
             self.deploy_root,
+            self.upstream_root,
             self.repos_root,
             self.runtime_root,
             self.logs_root,
             self.service_state_root,
+            self.gateway_state_root,
+            self.gateway_logs_root,
         ):
             path.mkdir(parents=True, exist_ok=True)
         return self
@@ -48,15 +54,18 @@ def find_repo_root(start: Path | None = None) -> Path:
     raise RuntimeError("unable to locate remram-gateway repo root")
 
 
-def build_layout(state_root: Path, runtime_artifacts_root: Path) -> GatewayLayout:
+def build_layout(state_root: Path, runtime_artifacts_root: Path, logs_root: Path) -> GatewayLayout:
     repo_root = find_repo_root()
     layout = GatewayLayout(
         repo_root=repo_root,
         state_root=state_root,
         deploy_root=state_root / "deploy",
+        upstream_root=state_root / "upstream",
         repos_root=state_root / "repos",
         runtime_root=runtime_artifacts_root,
-        logs_root=runtime_artifacts_root / "logs",
+        logs_root=logs_root,
         service_state_root=state_root / "services",
+        gateway_state_root=state_root / "gateway",
+        gateway_logs_root=logs_root / "gateway",
     )
     return layout.ensure()

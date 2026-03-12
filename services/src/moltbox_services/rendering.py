@@ -211,6 +211,7 @@ def render_service(
         "container_name": container_names[0],
         "compose_project": compose_project,
         "state_root": str(config.state_root),
+        "logs_root": str(config.logs_root),
         "service_state_dir": str(config.layout.service_state_dir(spec.canonical_name)),
         "runtime_root": str(config.runtime_artifacts_root),
         "runtime_component_dir": str(config.layout.runtime_component_dir(spec.canonical_name)),

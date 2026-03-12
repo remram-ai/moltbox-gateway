@@ -10,6 +10,9 @@ import yaml
 from .errors import ConfigError
 from .layout import GatewayLayout, build_layout
 
+DEFAULT_STATE_ROOT = Path("/srv/moltbox-state")
+DEFAULT_LOGS_ROOT = Path("/srv/moltbox-logs")
+
 
 def _env_value(*env_names: str) -> str | None:
     for env_name in env_names:
@@ -98,6 +101,7 @@ class GatewayConfig:
     config_path: Path
     state_root: Path
     runtime_artifacts_root: Path
+    logs_root: Path
     services_repo_url: str | None
     runtime_repo_url: str | None
     skills_repo_url: str | None
@@ -108,7 +112,7 @@ class GatewayConfig:
 
 
 def resolve_config(args: Any | None = None) -> GatewayConfig:
-    state_root_default = Path.home() / ".remram"
+    state_root_default = DEFAULT_STATE_ROOT
     config_path_default = state_root_default / "gateway" / "config.yaml"
     config_path = _resolve_path(
         getattr(args, "config_path", None),
@@ -124,11 +128,22 @@ def resolve_config(args: Any | None = None) -> GatewayConfig:
         _deep_get(payload, "paths", "state_root"),
         state_root_default,
     )
+    logs_root_configured = (
+        getattr(args, "logs_root", None)
+        or _env_value("MOLTBOX_LOGS_ROOT", "REMRAM_LOGS_ROOT")
+        or _deep_get(payload, "paths", "logs_root")
+    )
+    logs_root = _resolve_path(
+        getattr(args, "logs_root", None),
+        ("MOLTBOX_LOGS_ROOT", "REMRAM_LOGS_ROOT"),
+        _deep_get(payload, "paths", "logs_root"),
+        DEFAULT_LOGS_ROOT if not logs_root_configured and state_root == state_root_default else state_root / "logs",
+    )
     runtime_artifacts_root = _resolve_path(
         getattr(args, "runtime_artifacts_root", None),
         ("MOLTBOX_RUNTIME_ROOT", "REMRAM_RUNTIME_ROOT"),
         _deep_get(payload, "paths", "runtime_root"),
-        Path.home() / "Moltbox",
+        state_root / "runtime",
     )
     services_repo_url = _resolve_string(
         getattr(args, "services_repo_url", None),
@@ -166,11 +181,12 @@ def resolve_config(args: Any | None = None) -> GatewayConfig:
         _deep_get(payload, "cli", "path"),
         "moltbox",
     )
-    layout = build_layout(state_root=state_root, runtime_artifacts_root=runtime_artifacts_root)
+    layout = build_layout(state_root=state_root, runtime_artifacts_root=runtime_artifacts_root, logs_root=logs_root)
     return GatewayConfig(
         config_path=config_path,
         state_root=state_root,
         runtime_artifacts_root=runtime_artifacts_root,
+        logs_root=logs_root,
         services_repo_url=services_repo_url or None,
         runtime_repo_url=runtime_repo_url or None,
         skills_repo_url=skills_repo_url or None,
