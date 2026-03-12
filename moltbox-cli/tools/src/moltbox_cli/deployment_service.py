@@ -24,6 +24,9 @@ def _primitive_config_payload(config: AppConfig) -> dict[str, object]:
         "policy_path": str(config.policy_path),
         "state_root": str(config.state_root),
         "runtime_artifacts_root": str(config.runtime_artifacts_root),
+        "services_repo_url": config.services_repo_url or "",
+        "runtime_repo_url": config.runtime_repo_url or "",
+        "skills_repo_url": config.skills_repo_url or "",
         "internal_host": config.internal_host,
         "internal_port": config.internal_port,
     }

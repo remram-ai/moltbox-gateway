@@ -34,6 +34,9 @@ class AppConfig:
     policy_path: Path
     state_root: Path
     runtime_artifacts_root: Path
+    services_repo_url: str | None
+    runtime_repo_url: str | None
+    skills_repo_url: str | None
     internal_host: str
     internal_port: int
     cli_command: list[str]
@@ -45,6 +48,9 @@ class AppConfig:
             "policy_path": str(self.policy_path),
             "state_root": str(self.state_root),
             "runtime_artifacts_root": str(self.runtime_artifacts_root),
+            "services_repo_url": self.services_repo_url or "",
+            "runtime_repo_url": self.runtime_repo_url or "",
+            "skills_repo_url": self.skills_repo_url or "",
             "internal_host": self.internal_host,
             "internal_port": self.internal_port,
             "cli_command": self.cli_command,
@@ -174,6 +180,24 @@ def resolve_config(args: Any | None = None) -> AppConfig:
         _deep_get(config_payload, "cli", "path"),
         "moltbox",
     )
+    services_repo_url = _resolve_string(
+        getattr(args, "services_repo_url", None),
+        ("MOLTBOX_SERVICES_REPO_URL", "REMRAM_SERVICES_REPO_URL"),
+        _deep_get(config_payload, "repositories", "services", "url"),
+        "",
+    )
+    runtime_repo_url = _resolve_string(
+        getattr(args, "runtime_repo_url", None),
+        ("MOLTBOX_RUNTIME_REPO_URL", "REMRAM_RUNTIME_REPO_URL"),
+        _deep_get(config_payload, "repositories", "runtime", "url"),
+        "",
+    )
+    skills_repo_url = _resolve_string(
+        getattr(args, "skills_repo_url", None),
+        ("MOLTBOX_SKILLS_REPO_URL", "REMRAM_SKILLS_REPO_URL"),
+        _deep_get(config_payload, "repositories", "skills", "url"),
+        "",
+    )
 
     layout = build_host_layout(
         root=state_root,
@@ -186,6 +210,9 @@ def resolve_config(args: Any | None = None) -> AppConfig:
         policy_path=policy_path,
         state_root=state_root,
         runtime_artifacts_root=runtime_artifacts_root,
+        services_repo_url=services_repo_url or None,
+        runtime_repo_url=runtime_repo_url or None,
+        skills_repo_url=skills_repo_url or None,
         internal_host=internal_host,
         internal_port=internal_port,
         cli_command=[cli_path],

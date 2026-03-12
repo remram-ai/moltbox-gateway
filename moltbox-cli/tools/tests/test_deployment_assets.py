@@ -29,7 +29,7 @@ def test_tools_render_uses_tools_container_assets(tmp_path: Path, monkeypatch) -
     payload = render_assets(config, "tools")
     assert payload["ok"] is True
     assert payload["target"] == "tools"
-    assert payload["command"] == "moltbox tools update"
+    assert payload["command"] == "moltbox gateway update"
     rendered = payload["render"]
     asset_path = rendered["asset_path"].replace("/", "\\")
     assert "moltbox\\containers\\tools" in asset_path

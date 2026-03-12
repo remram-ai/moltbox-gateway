@@ -65,6 +65,7 @@ class HostLayout:
     shared_dir: Path
     snapshots_dir: Path
     deploy_dir: Path
+    repositories_dir: Path
     runtime_artifacts_root: Path
     logs_dir: Path
 
@@ -86,6 +87,7 @@ class HostLayout:
             "shared_dir": str(self.shared_dir),
             "snapshots_dir": str(self.snapshots_dir),
             "deploy_dir": str(self.deploy_dir),
+            "repositories_dir": str(self.repositories_dir),
             "runtime_artifacts_root": str(self.runtime_artifacts_root),
             "logs_dir": str(self.logs_dir),
         }
@@ -154,6 +156,7 @@ def build_host_layout(
         shared_dir=state_root / "shared",
         snapshots_dir=state_root / "snapshots",
         deploy_dir=state_root / "deploy",
+        repositories_dir=state_root / "repositories",
         runtime_artifacts_root=runtime_root,
         logs_dir=runtime_root / "logs",
     )
@@ -172,6 +175,7 @@ def ensure_host_layout(layout: HostLayout) -> HostLayout:
         layout.shared_dir,
         layout.snapshots_dir,
         layout.deploy_dir,
+        layout.repositories_dir,
         layout.runtime_artifacts_root,
         layout.logs_dir,
     ):

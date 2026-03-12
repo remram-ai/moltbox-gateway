@@ -3,6 +3,11 @@ ALIASES = {
     "caddy": "ssl",
     "control": "tools",
     "control-plane": "tools",
+    "gateway": "tools",
+    "openclaw": "prod",
+    "openclaw-dev": "dev",
+    "openclaw-test": "test",
+    "openclaw-prod": "prod",
 }
 
 RUNTIME_TARGETS = {"dev", "test", "prod"}
@@ -27,7 +32,15 @@ def target_domain(target_id: str) -> str:
 
 def canonical_cli_command(target_id: str, verb: str) -> str:
     resolved = resolve_target_identifier(target_id)
-    domain = target_domain(resolved)
-    if domain == "tools":
-        return f"moltbox tools {'update' if verb == 'deploy' else verb}"
-    return f"moltbox {domain} {resolved} {verb}"
+    if resolved == TOOLS_TARGET:
+        gateway_verb = "update" if verb == "deploy" else verb
+        return f"moltbox gateway {gateway_verb}"
+    component_name = {
+        "dev": "openclaw-dev",
+        "test": "openclaw-test",
+        "prod": "openclaw-prod",
+        "ssl": "caddy",
+    }.get(resolved, resolved)
+    if verb in {"deploy", "rollback"}:
+        return f"moltbox service {verb} {component_name}"
+    return f"moltbox {component_name} {verb}"

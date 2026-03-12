@@ -13,6 +13,7 @@ SRC_DIR = CLI_ROOT / "tools" / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from moltbox_cli.layout import find_repo_root
+from moltbox_cli.v2_actions import component_config_sync_action, skill_deploy_action
 
 
 def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -30,142 +31,182 @@ def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.Complet
     )
 
 
-def test_tools_version_returns_json() -> None:
-    completed = run_cli("tools", "version")
+def _git(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, check=False)
+
+
+def create_git_repo(path: Path, files: dict[str, str]) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    init = subprocess.run(["git", "init", str(path)], capture_output=True, text=True, check=False)
+    assert init.returncode == 0, init.stderr
+    for relative, content in files.items():
+        file_path = path / relative
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+    add = _git(path, "add", ".")
+    assert add.returncode == 0, add.stderr
+    commit = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test User",
+            "commit",
+            "-m",
+            "init",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert commit.returncode == 0, commit.stderr
+    return path
+
+
+class Args:
+    config_path = None
+    policy_path = None
+    state_root = None
+    runtime_artifacts_root = None
+    services_repo_url = None
+    runtime_repo_url = None
+    skills_repo_url = None
+    internal_host = None
+    internal_port = None
+    cli_path = None
+
+
+def test_version_returns_json() -> None:
+    completed = run_cli("--version")
     assert completed.returncode == 0
     payload = json.loads(completed.stdout)
     assert "version" in payload
 
 
-def test_help_lists_only_canonical_domains() -> None:
+def test_help_lists_v2_namespaces() -> None:
     completed = run_cli("--help")
     assert completed.returncode == 0
     assert "usage: moltbox" in completed.stdout
-    assert "{tools,host,runtime}" in completed.stdout
-    assert "==SUPPRESS==" not in completed.stdout
+    assert "moltbox gateway" in completed.stdout
+    assert "moltbox service" in completed.stdout
+    assert "moltbox skill deploy <skill>" in completed.stdout
+    assert "moltbox openclaw-dev" in completed.stdout
     assert "render-assets" not in completed.stdout
     assert "list-targets" not in completed.stdout
 
 
-def test_tools_inspect_lists_targets(tmp_path: Path) -> None:
+def test_gateway_inspect_lists_targets(tmp_path: Path) -> None:
     env = {
         "MOLTBOX_STATE_ROOT": str(tmp_path / ".remram"),
         "MOLTBOX_RUNTIME_ROOT": str(tmp_path / "Moltbox"),
     }
-    completed = run_cli("tools", "inspect", env=env)
+    completed = run_cli("gateway", "inspect", env=env)
     assert completed.returncode == 0
     payload = json.loads(completed.stdout)
     target_ids = {target["id"] for target in payload["targets"]}
     assert {"tools", "ollama", "dev", "ssl"}.issubset(target_ids)
-    assert "caddy" not in target_ids
-    assert "control-plane" not in target_ids
 
 
-def test_tools_inspect_reconciles_legacy_registry(tmp_path: Path) -> None:
-    state_root = tmp_path / ".remram"
-    runtime_root = tmp_path / "Moltbox"
-    target_dir = state_root / "state" / "targets"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    (target_dir / "control-plane.json").write_text(
-        json.dumps(
-            {
-                "id": "control-plane",
-                "display_name": "MoltBox Tools",
-                "created_at": "2026-01-01T00:00:00+00:00",
-                "updated_at": "2026-01-01T00:00:00+00:00",
-                "metadata": {"aliases": ["cli", "control"]},
-            }
-        ),
-        encoding="utf-8",
-    )
-    (target_dir / "ollama.json").write_text(
-        json.dumps(
-            {
-                "id": "ollama",
-                "target_class": "shared_service",
-                "display_name": "Ollama",
-                "created_at": "2026-01-01T00:00:00+00:00",
-                "updated_at": "2026-01-01T00:00:00+00:00",
-                "metadata": {},
-                "service_name": "ollama",
-                "container_name": "ollama",
-            }
-        ),
-        encoding="utf-8",
-    )
-    (target_dir / "caddy.json").write_text(
-        json.dumps(
-            {
-                "id": "caddy",
-                "display_name": "Caddy",
-                "created_at": "2026-01-01T00:00:00+00:00",
-                "updated_at": "2026-01-01T00:00:00+00:00",
-                "metadata": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    completed = run_cli(
-        "tools",
-        "inspect",
-        env={
-            "MOLTBOX_STATE_ROOT": str(state_root),
-            "MOLTBOX_RUNTIME_ROOT": str(runtime_root),
+def test_service_list_reads_external_services_repository(tmp_path: Path) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/openclaw-dev/compose.yml.template": "services:\n  openclaw-dev:\n    image: example/openclaw-dev:latest\n",
+            "services/openclaw-test/compose.yml.template": "services:\n  openclaw-test:\n    image: example/openclaw-test:latest\n",
+            "services/caddy/compose.yml.template": "services:\n  caddy:\n    image: caddy:latest\n",
         },
     )
-
+    env = {
+        "MOLTBOX_STATE_ROOT": str(tmp_path / ".remram"),
+        "MOLTBOX_RUNTIME_ROOT": str(tmp_path / "Moltbox"),
+        "MOLTBOX_SERVICES_REPO_URL": str(services_repo),
+    }
+    completed = run_cli("service", "list", env=env)
     assert completed.returncode == 0
     payload = json.loads(completed.stdout)
-    target_ids = {target["id"] for target in payload["targets"]}
-    assert "tools" in target_ids
-    assert "ssl" in target_ids
-    assert "control-plane" not in target_ids
-
-    stored_tools = json.loads((target_dir / "tools.json").read_text(encoding="utf-8"))
-    stored_ollama = json.loads((target_dir / "ollama.json").read_text(encoding="utf-8"))
-    stored_ssl = json.loads((target_dir / "ssl.json").read_text(encoding="utf-8"))
-    assert stored_tools["id"] == "tools"
-    assert stored_tools["asset_path"] == "tools"
-    assert "control-plane" in stored_tools["metadata"]["aliases"]
-    assert stored_ollama["compose_project"] == "moltbox"
-    assert stored_ollama["container_names"] == ["moltbox-ollama"]
-    assert stored_ssl["id"] == "ssl"
-    assert stored_ssl["container_names"] == ["moltbox-caddy"]
-    assert "caddy" in stored_ssl["metadata"]["aliases"]
-    assert not (target_dir / "control-plane.json").exists()
-    assert not (target_dir / "caddy.json").exists()
+    service_names = {service["name"] for service in payload["services"]}
+    assert {"openclaw-dev", "openclaw-test", "caddy"} == service_names
+    supported = {service["name"] for service in payload["services"] if service["supported_by_gateway"]}
+    assert {"openclaw-dev", "openclaw-test", "caddy"} == supported
 
 
-def test_runtime_rejects_reversed_legacy_order(tmp_path: Path) -> None:
-    completed = run_cli(
-        "runtime",
-        "start",
-        "dev",
-        env={
-            "MOLTBOX_STATE_ROOT": str(tmp_path / ".remram"),
-            "MOLTBOX_RUNTIME_ROOT": str(tmp_path / "Moltbox"),
+def test_runtime_config_sync_reads_external_runtime_repository(tmp_path: Path, monkeypatch) -> None:
+    runtime_repo = create_git_repo(
+        tmp_path / "moltbox-runtime",
+        {
+            "openclaw-dev/openclaw.json": json.dumps({"gateway": {"controlUi": {"allowedOrigins": []}}}, indent=2) + "\n",
+            "openclaw-dev/model-runtime.yml": "model: qwen3:8b\n",
+            "openclaw-dev/opensearch.yml": "cluster.name: remram\n",
+            "openclaw-dev/openclaw/channels.yaml": "channels: []\n",
         },
     )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_REPO_URL", str(runtime_repo))
+    from moltbox_cli.config import resolve_config
 
-    assert completed.returncode == 2
-    assert "usage: moltbox runtime" in completed.stderr
-    assert "invalid choice" in completed.stderr
+    config = resolve_config(Args())
+    payload = component_config_sync_action(config, "openclaw-dev")
+
+    assert payload["ok"] is True
+    runtime_root = Path(str(payload["runtime_root"]))
+    assert (runtime_root / "openclaw.json").exists()
+    synced = json.loads((runtime_root / "openclaw.json").read_text(encoding="utf-8"))
+    allowed_origins = synced["gateway"]["controlUi"]["allowedOrigins"]
+    assert any(origin.startswith("http://127.0.0.1:18790") for origin in allowed_origins)
+    assert (runtime_root / "openclaw" / "channels.yaml").exists()
 
 
-def test_tools_deploy_is_not_exposed(tmp_path: Path) -> None:
-    completed = run_cli(
-        "tools",
-        "deploy",
-        env={
-            "MOLTBOX_STATE_ROOT": str(tmp_path / ".remram"),
-            "MOLTBOX_RUNTIME_ROOT": str(tmp_path / "Moltbox"),
+def test_skill_deploy_uses_skill_manifest_plan(tmp_path: Path, monkeypatch) -> None:
+    skills_repo = create_git_repo(
+        tmp_path / "remram-skills",
+        {
+            "skills/discord/deployment.yaml": (
+                "service_deploy:\n"
+                "  - caddy\n"
+                "runtime_sync:\n"
+                "  - openclaw-dev\n"
+                "runtime_reload:\n"
+                "  - openclaw-dev\n"
+            ),
         },
     )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SKILLS_REPO_URL", str(skills_repo))
+    from moltbox_cli.config import resolve_config
+    import moltbox_cli.v2_actions as v2_actions
 
-    assert completed.returncode == 2
-    assert "usage: moltbox tools" in completed.stderr
-    assert "invalid choice" in completed.stderr
+    calls: list[tuple[str, str]] = []
+
+    def fake_service_deploy(config, name):  # noqa: ANN001
+        calls.append(("service_deploy", name))
+        return {"ok": True, "name": name}
+
+    def fake_config_sync(config, name):  # noqa: ANN001
+        calls.append(("runtime_sync", name))
+        return {"ok": True, "name": name}
+
+    def fake_component_action(config, name, verb, **kwargs):  # noqa: ANN001, ARG001
+        calls.append((verb, name))
+        return {"ok": True, "name": name, "verb": verb}
+
+    monkeypatch.setattr(v2_actions, "service_deploy_action", fake_service_deploy)
+    monkeypatch.setattr(v2_actions, "component_config_sync_action", fake_config_sync)
+    monkeypatch.setattr(v2_actions, "component_action", fake_component_action)
+
+    config = resolve_config(Args())
+    payload = skill_deploy_action(config, "discord")
+
+    assert payload["ok"] is True
+    assert calls == [
+        ("service_deploy", "caddy"),
+        ("runtime_sync", "openclaw-dev"),
+        ("reload", "openclaw-dev"),
+    ]
 
 
 def test_find_repo_root_accepts_baked_container_checkout(tmp_path: Path, monkeypatch) -> None:

@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .component_resolution import resolve_component
 from .config import AppConfig
 from .errors import ValidationError
 from .jsonio import write_json_file
 from .layout import build_repo_layout
 from .operation_ids import utc_now_iso
+from .repository_adapters import runtime_resource, service_resource
 from .registry import get_target
 from .ssl_ingress import build_ssl_render_context
 from .target_resolution import canonical_cli_command
@@ -19,8 +21,35 @@ def deployment_assets_root() -> Path:
     return build_repo_layout().containers_dir
 
 
-def asset_path_for_target(asset_path: str) -> Path:
-    return deployment_assets_root() / asset_path
+def _component_for_record(target_id: str) -> str:
+    return {
+        "tools": "gateway",
+        "dev": "openclaw-dev",
+        "test": "openclaw-test",
+        "prod": "openclaw-prod",
+        "ssl": "caddy",
+        "ollama": "ollama",
+        "opensearch": "opensearch",
+    }.get(target_id, target_id)
+
+
+def asset_source_for_target(config: AppConfig, target_id: str) -> tuple[Path, Path, dict[str, str]]:
+    if target_id == "tools":
+        repo_layout = build_repo_layout()
+        path = repo_layout.containers_dir / "tools"
+        return (
+            path,
+            repo_layout.repo_root,
+            {
+                "repository": "remram-gateway",
+                "repository_url": "",
+                "relative_path": "moltbox/containers/tools",
+                "path": str(path),
+            },
+        )
+    component = resolve_component(_component_for_record(target_id))
+    resource = service_resource(config, str(component.service_repo_name))
+    return resource.path, resource.repository.checkout_dir, resource.as_dict()
 
 
 def _runtime_config_mappings(config_dir: Path) -> list[tuple[Path, Path]]:
@@ -35,17 +64,28 @@ def _runtime_config_mappings(config_dir: Path) -> list[tuple[Path, Path]]:
     return mappings
 
 
-def config_path_for_target(target_id: str, target_class: str) -> Path | None:
-    config_dir = build_repo_layout().config_dir
-    if target_class == "runtime":
-        return config_dir
-    if target_id == "ssl":
-        return config_dir / "ssl"
-    if target_id == "opensearch":
-        return config_dir / "opensearch.yml"
+def config_source_for_target(config: AppConfig, target_id: str, target_class: str) -> tuple[Path | None, dict[str, str] | None]:
     if target_id == "tools":
-        return config_dir / "control-plane-policy.yaml"
-    return None
+        config_path = build_repo_layout().config_dir / "control-plane-policy.yaml"
+        return (
+            config_path,
+            {
+                "repository": "remram-gateway",
+                "repository_url": "",
+                "relative_path": "moltbox/config/control-plane-policy.yaml",
+                "path": str(config_path),
+            },
+        )
+    component = resolve_component(_component_for_record(target_id))
+    if component.runtime_repo_name is None:
+        return None, None
+    try:
+        resource = runtime_resource(config, component.runtime_repo_name)
+    except ValidationError:
+        if target_class == "runtime":
+            raise
+        return None, None
+    return resource.path, resource.as_dict()
 
 
 def rendered_output_dir(config: AppConfig, target: str, profile: str | None) -> Path:
@@ -135,9 +175,8 @@ def _discord_guilds_block(target: str) -> str:
     return "\n".join(lines)
 
 
-def render_context(config: AppConfig, target: str) -> dict[str, str]:
+def render_context(config: AppConfig, target: str, repo_root: Path) -> dict[str, str]:
     record = get_target(config, target)
-    repo_root = build_repo_layout().repo_root
     runtime_root = record.runtime_root or ""
     shared_root = str(config.layout.shared_dir / target) if record.target_class == "shared_service" else ""
     container_uid, container_gid = _existing_owner(config.state_root)
@@ -233,7 +272,7 @@ def render_target(config: AppConfig, target: str, profile: str | None = None) ->
             target=record.id,
             profile=render_profile,
         )
-    asset_dir = asset_path_for_target(record.asset_path)
+    asset_dir, asset_repo_root, asset_source = asset_source_for_target(config, record.id)
     if not asset_dir.exists():
         raise ValidationError(
             f"deployment assets for target '{record.id}' were not found",
@@ -241,7 +280,7 @@ def render_target(config: AppConfig, target: str, profile: str | None = None) ->
             target=record.id,
             asset_path=str(asset_dir),
         )
-    config_source = config_path_for_target(record.id, record.target_class)
+    config_source, config_source_details = config_source_for_target(config, record.id, record.target_class)
     if record.target_class == "runtime" and config_source is not None:
         runtime_config_required = all(source.exists() for source, _ in _runtime_config_mappings(config_source))
     else:
@@ -266,7 +305,7 @@ def render_target(config: AppConfig, target: str, profile: str | None = None) ->
                 child.rmdir()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    context = render_context(config, record.id)
+    context = render_context(config, record.id, asset_repo_root)
     if record.id == "ssl":
         context.update(build_ssl_render_context(config))
     source_paths = _render_tree(asset_dir, output_dir, context)
@@ -307,6 +346,7 @@ def render_target(config: AppConfig, target: str, profile: str | None = None) ->
         "output_dir": str(output_dir),
         "render_manifest_path": str(output_dir / "render-manifest.json"),
         "asset_path": str(asset_dir),
+        "asset_source": asset_source,
     }
     if context.get("gateway_port"):
         payload["gateway_port"] = context["gateway_port"]
@@ -314,6 +354,8 @@ def render_target(config: AppConfig, target: str, profile: str | None = None) ->
         payload["internal_network_name"] = context["internal_network_name"]
     if config_source is not None and rendered_config_path is not None:
         payload["config_path"] = str(config_source)
+        if config_source_details is not None:
+            payload["config_source"] = config_source_details
         if record.target_class == "runtime":
             payload["rendered_runtime_root_dir"] = str(rendered_config_path)
         elif config_source.is_dir():

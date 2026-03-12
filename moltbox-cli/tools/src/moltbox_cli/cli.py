@@ -3,14 +3,22 @@ from __future__ import annotations
 import argparse
 
 from .commands.version import handle_version
-from .errors import MoltboxCliError, TargetNotFoundError
+from .errors import MoltboxCliError
 from .jsonio import emit_json
-from .target_resolution import HOST_TARGETS, RUNTIME_TARGETS, resolve_target_identifier
-
-
-RUNTIME_VERBS = {"deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart", "chat"}
-HOST_VERBS = {"deploy", "rollback", "status", "inspect", "logs", "start", "stop", "restart"}
-TOOLS_VERBS = {"version", "health", "serve", "status", "inspect", "update", "rollback", "logs"}
+from .v2_actions import (
+    component_action,
+    component_config_sync_action,
+    gateway_action,
+    service_deploy_action,
+    service_doctor_action,
+    service_inspect_action,
+    service_lifecycle_action,
+    service_list_action,
+    service_logs_action,
+    service_rollback_action,
+    service_status_action,
+    skill_deploy_action,
+)
 
 
 def _emit_and_exit(payload: dict[str, object]) -> None:
@@ -18,71 +26,76 @@ def _emit_and_exit(payload: dict[str, object]) -> None:
     raise SystemExit(int(payload.get("exit_code", 0)))
 
 
-def _resolve_host_target(target: str) -> str:
-    resolved = resolve_target_identifier(target)
-    if resolved not in HOST_TARGETS:
-        raise TargetNotFoundError(target)
-    return resolved
-
-
-def _resolve_runtime_target(environment: str) -> str:
-    resolved = resolve_target_identifier(environment)
-    if resolved not in RUNTIME_TARGETS:
-        raise TargetNotFoundError(environment)
-    return resolved
-
-
-def _dispatch_target_action(config, target: str, verb: str) -> None:  # noqa: ANN001
-    if verb in {"status", "inspect"}:
-        from .commands.status import handle_status
-
-        _emit_and_exit(handle_status(config, target))
-    if verb in {"start", "stop", "restart"}:
-        from .deployment_service import host_lifecycle
-
-        _emit_and_exit(host_lifecycle(config, target, verb))
-    if verb in {"deploy", "update"}:
-        from .commands.deploy import handle_deploy
-
-        _emit_and_exit(handle_deploy(config, target))
-    if verb == "rollback":
-        from .commands.rollback import handle_rollback
-
-        _emit_and_exit(handle_rollback(config, target))
-    if verb == "logs":
-        from .deployment_service import read_target_logs
-
-        _emit_and_exit(read_target_logs(config, target))
-    raise MoltboxCliError(
-        error_type="unsupported_command",
-        error_message=f"unsupported verb '{verb}'",
-        recovery_message="run `moltbox --help` to see available commands",
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="moltbox", description="Canonical MoltBox operator CLI.")
+    parser = argparse.ArgumentParser(
+        prog="moltbox",
+        add_help=False,
+        description="MoltBox control-plane CLI.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Primary namespaces:\n"
+            "  moltbox gateway ...\n"
+            "  moltbox service ...\n"
+            "  moltbox skill deploy <skill>\n"
+            "  moltbox openclaw ...\n"
+            "  moltbox openclaw-dev ...\n"
+            "  moltbox openclaw-test ...\n"
+            "  moltbox openclaw-prod ..."
+        ),
+    )
+    parser.add_argument("-h", "--help", action="store_true")
+    parser.add_argument("--version", action="store_true")
     parser.add_argument("--config-path")
     parser.add_argument("--policy-path")
     parser.add_argument("--state-root")
     parser.add_argument("--runtime-artifacts-root")
+    parser.add_argument("--services-repo-url")
+    parser.add_argument("--runtime-repo-url")
+    parser.add_argument("--skills-repo-url")
     parser.add_argument("--internal-host")
     parser.add_argument("--internal-port", type=int)
     parser.add_argument("--cli-path")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("component", nargs="?")
+    parser.add_argument("command", nargs="?")
+    parser.add_argument("args", nargs=argparse.REMAINDER)
+    return parser
 
-    tools = subparsers.add_parser("tools", help="Operate the MoltBox CLI tooling.")
-    tools.add_argument("verb", choices=sorted(TOOLS_VERBS), help="Tooling verb.")
 
-    host = subparsers.add_parser("host", help="Operate host services on the MoltBox machine.")
-    host.add_argument("service", help="Host service such as ssl, ollama, or opensearch.")
-    host.add_argument("verb", choices=sorted(HOST_VERBS), help="Host-service verb.")
+def _gateway_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="moltbox gateway")
+    parser.add_argument("verb", choices=["health", "inspect", "logs", "rollback", "status", "update"])
+    return parser
 
-    runtime = subparsers.add_parser("runtime", help="Operate OpenClaw runtime environments.")
-    runtime.add_argument("environment", choices=sorted(RUNTIME_TARGETS), help="Runtime environment.")
-    runtime.add_argument("verb", choices=sorted(RUNTIME_VERBS), help="Runtime verb.")
-    runtime.add_argument("--message", help="Single-turn runtime chat prompt.")
-    runtime.add_argument("--timeout-seconds", type=int, default=30, help="Runtime chat timeout in seconds.")
+
+def _service_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="moltbox service")
+    subparsers = parser.add_subparsers(dest="verb", required=True)
+    subparsers.add_parser("list")
+    for verb in ("inspect", "status", "logs", "deploy", "start", "stop", "restart", "rollback", "doctor"):
+        command = subparsers.add_parser(verb)
+        command.add_argument("service")
+    return parser
+
+
+def _skill_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="moltbox skill")
+    subparsers = parser.add_subparsers(dest="verb", required=True)
+    deploy = subparsers.add_parser("deploy")
+    deploy.add_argument("skill")
+    return parser
+
+
+def _component_parser(component_name: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=f"moltbox {component_name}")
+    subparsers = parser.add_subparsers(dest="verb", required=True)
+    for verb in ("status", "inspect", "logs", "start", "stop", "restart", "reload", "doctor", "monitor"):
+        subparsers.add_parser(verb)
+    chat = subparsers.add_parser("chat")
+    chat.add_argument("--message", required=True)
+    chat.add_argument("--timeout-seconds", type=int, default=30)
+    config = subparsers.add_parser("config")
+    config_subparsers = config.add_subparsers(dest="config_verb", required=True)
+    config_subparsers.add_parser("sync")
     return parser
 
 
@@ -90,55 +103,92 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        if args.version:
+            emit_json(handle_version())
+            return
+
+        if args.help and args.component is None:
+            parser.print_help()
+            return
+        if args.component is None:
+            parser.print_help()
+            raise SystemExit(2)
+        if args.help and args.component == "gateway":
+            _gateway_parser().print_help()
+            return
+        if args.help and args.component == "service":
+            _service_parser().print_help()
+            return
+        if args.help and args.component == "skill":
+            _skill_parser().print_help()
+            return
+        if args.help:
+            _component_parser(args.component).print_help()
+            return
+        if args.command is None:
+            parser.print_help()
+            raise SystemExit(2)
+
         from .config import resolve_config
 
         config = resolve_config(args)
+        dispatch_argv = [args.command, *args.args]
 
-        if args.command == "tools":
-            if args.verb == "version":
-                emit_json(handle_version())
-                return
-            if args.verb == "health":
-                from .commands.health import handle_health
-
-                emit_json(handle_health(config))
-                return
-            if args.verb == "serve":
-                from .commands.serve import handle_serve
-
-                handle_serve(config)
-                return
-            if args.verb == "inspect":
-                from .commands.targets import handle_list_targets
-
-                emit_json(handle_list_targets(config))
-                return
-            _dispatch_target_action(config, "tools", args.verb)
+        if args.component == "gateway":
+            gateway_args = _gateway_parser().parse_args(dispatch_argv)
+            _emit_and_exit(gateway_action(config, gateway_args.verb))
             return
 
-        if args.command == "host":
-            resolved = _resolve_host_target(args.service)
-            _dispatch_target_action(config, resolved, args.verb)
-            return
-
-        if args.command == "runtime":
-            from .commands.runtime import handle_runtime, handle_runtime_chat
-
-            resolved = _resolve_runtime_target(args.environment)
-            if args.verb == "chat":
-                _emit_and_exit(handle_runtime_chat(config, resolved, args.message, args.timeout_seconds))
+        if args.component == "service":
+            service_args = _service_parser().parse_args(dispatch_argv)
+            if service_args.verb == "list":
+                _emit_and_exit(service_list_action(config))
                 return
-            if args.verb in {"start", "stop", "restart"}:
-                _emit_and_exit(handle_runtime(config, resolved, args.verb))
+            if service_args.verb == "inspect":
+                _emit_and_exit(service_inspect_action(config, service_args.service))
                 return
-            _dispatch_target_action(config, resolved, args.verb)
-            return
+            if service_args.verb == "status":
+                _emit_and_exit(service_status_action(config, service_args.service))
+                return
+            if service_args.verb == "logs":
+                _emit_and_exit(service_logs_action(config, service_args.service))
+                return
+            if service_args.verb == "deploy":
+                _emit_and_exit(service_deploy_action(config, service_args.service))
+                return
+            if service_args.verb in {"start", "stop", "restart"}:
+                _emit_and_exit(service_lifecycle_action(config, service_args.service, service_args.verb))
+                return
+            if service_args.verb == "rollback":
+                _emit_and_exit(service_rollback_action(config, service_args.service))
+                return
+            if service_args.verb == "doctor":
+                _emit_and_exit(service_doctor_action(config, service_args.service))
+                return
 
-        raise MoltboxCliError(
-            error_type="unsupported_command",
-            error_message=f"unsupported command '{args.command}'",
-            recovery_message="run `moltbox --help` to see available commands",
-        )
+        if args.component == "skill":
+            skill_args = _skill_parser().parse_args(dispatch_argv)
+            if skill_args.verb == "deploy":
+                _emit_and_exit(skill_deploy_action(config, skill_args.skill))
+                return
+
+        component_args = _component_parser(args.component).parse_args(dispatch_argv)
+        if component_args.verb == "config":
+            if component_args.config_verb == "sync":
+                _emit_and_exit(component_config_sync_action(config, args.component))
+                return
+        if component_args.verb == "chat":
+            _emit_and_exit(
+                component_action(
+                    config,
+                    args.component,
+                    component_args.verb,
+                    message=component_args.message,
+                    timeout_seconds=component_args.timeout_seconds,
+                )
+            )
+            return
+        _emit_and_exit(component_action(config, args.component, component_args.verb))
     except MoltboxCliError as exc:
         emit_json(exc.to_payload())
         raise SystemExit(exc.exit_code) from exc
