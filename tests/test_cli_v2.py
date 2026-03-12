@@ -477,6 +477,59 @@ def test_validate_containers_fails_when_docker_is_unavailable(monkeypatch) -> No
     assert payload["details"]["reason"] == "docker_not_available"
 
 
+def test_validate_containers_fails_when_health_never_becomes_ready(monkeypatch) -> None:
+    inspections = iter(
+        [
+            {
+                "ok": True,
+                "details": {
+                    "container_state": {
+                        "containers": [
+                            {
+                                "name": "openclaw-dev",
+                                "present": True,
+                                "state": "running",
+                                "health": "starting",
+                                "container_id": "abc",
+                                "image": "ghcr.io/openclaw/openclaw:latest",
+                            }
+                        ]
+                    }
+                },
+            },
+            {
+                "ok": True,
+                "details": {
+                    "container_state": {
+                        "containers": [
+                            {
+                                "name": "openclaw-dev",
+                                "present": True,
+                                "state": "restarting",
+                                "health": None,
+                                "container_id": "abc",
+                                "image": "ghcr.io/openclaw/openclaw:latest",
+                            }
+                        ]
+                    }
+                },
+            },
+        ]
+    )
+    monotonic_values = iter([0.0, 0.5, 1.5])
+
+    monkeypatch.setattr(docker_engine, "inspect_containers", lambda names: next(inspections))
+    monkeypatch.setattr(docker_engine.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(docker_engine.time, "sleep", lambda seconds: None)
+
+    payload = docker_engine.validate_containers(["openclaw-dev"], timeout_seconds=1, poll_interval_seconds=0)
+
+    assert payload["ok"] is False
+    assert payload["details"]["result"] == "fail"
+    assert payload["details"]["reason"] == "containers_not_ready"
+    assert payload["errors"] == ["openclaw-dev"]
+
+
 def test_service_deploy_opensearch_uses_external_runtime_config(tmp_path: Path, monkeypatch) -> None:
     services_repo = create_git_repo(
         tmp_path / "moltbox-services",

@@ -231,23 +231,10 @@ def lifecycle(container_names: list[str], action: str) -> dict[str, Any]:
 
 def validate_containers(container_names: list[str], timeout_seconds: int = 30, poll_interval_seconds: int = 2) -> dict[str, Any]:
     deadline = time.monotonic() + max(timeout_seconds, 0)
-    inspected = inspect_containers(container_names)
-    if not inspected.get("ok"):
-        details = inspected.get("details") or {}
-        return {
-            "ok": False,
-            "details": {
-                "containers": [],
-                "result": "fail",
-                "reason": details.get("reason") or "inspect_failed",
-            },
-            "errors": [details.get("reason") or "inspect_failed"],
-        }
-    details = inspected.get("details") or {}
-    containers = (details.get("container_state") or {}).get("containers") or []
-    errors = [item["name"] for item in containers if item["state"] not in {"running", "created"}]
-    while errors and time.monotonic() < deadline:
-        time.sleep(max(poll_interval_seconds, 0))
+    ready_streak_without_health = 0
+    containers: list[dict[str, Any]] = []
+
+    while True:
         inspected = inspect_containers(container_names)
         if not inspected.get("ok"):
             details = inspected.get("details") or {}
@@ -258,16 +245,46 @@ def validate_containers(container_names: list[str], timeout_seconds: int = 30, p
                     "result": "fail",
                     "reason": details.get("reason") or "inspect_failed",
                 },
-                "errors": errors or [details.get("reason") or "inspect_failed"],
+                "errors": [details.get("reason") or "inspect_failed"],
             }
         details = inspected.get("details") or {}
         containers = (details.get("container_state") or {}).get("containers") or []
-        errors = [item["name"] for item in containers if item["state"] not in {"running", "created"}]
-    return {
-        "ok": not errors,
-        "details": {
-            "containers": containers,
-            "result": "pass" if not errors else "fail",
-        },
-        "errors": errors,
-    }
+        errors = [
+            item["name"]
+            for item in containers
+            if item["state"] != "running" or item.get("health") in {"starting", "unhealthy"}
+        ]
+        has_healthchecks = any(item.get("health") is not None for item in containers)
+        if not errors:
+            if has_healthchecks:
+                return {
+                    "ok": True,
+                    "details": {
+                        "containers": containers,
+                        "result": "pass",
+                    },
+                    "errors": [],
+                }
+            ready_streak_without_health += 1
+            if ready_streak_without_health >= 2 or time.monotonic() >= deadline or poll_interval_seconds <= 0:
+                return {
+                    "ok": True,
+                    "details": {
+                        "containers": containers,
+                        "result": "pass",
+                    },
+                    "errors": [],
+                }
+        else:
+            ready_streak_without_health = 0
+        if time.monotonic() >= deadline:
+            return {
+                "ok": False,
+                "details": {
+                    "containers": containers,
+                    "result": "fail",
+                    "reason": "containers_not_ready",
+                },
+                "errors": errors,
+            }
+        time.sleep(max(poll_interval_seconds, 0))
