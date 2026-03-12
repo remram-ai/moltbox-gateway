@@ -600,6 +600,43 @@ def deploy_gateway(
     skills_repo_url: str,
     gateway_ref: str,
 ) -> dict[str, object]:
+    inspect_gateway = _ssh(
+        ssh_target,
+        "docker inspect gateway --format '{{.Config.Image}}'",
+    )
+    if inspect_gateway.returncode == 0 and inspect_gateway.stdout.strip():
+        current_image = inspect_gateway.stdout.strip()
+        config_mount_path = f"{state_root}/repos/moltbox-runtime/gateway/config.yaml"
+        helper_command = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            "/var/run/docker.sock:/var/run/docker.sock",
+            "-v",
+            f"{state_root}:{state_root}",
+            "-v",
+            f"{logs_root}:{logs_root}",
+            "-v",
+            f"{config_mount_path}:/etc/moltbox/config.yaml:ro",
+            current_image,
+            "moltbox",
+            "--config-path",
+            "/etc/moltbox/config.yaml",
+            "service",
+            "deploy",
+            "gateway",
+            "--commit",
+            gateway_ref,
+        ]
+        completed = _ssh(ssh_target, " ".join(shlex.quote(part) for part in helper_command))
+        raw = _require(
+            completed,
+            error_message="gateway helper deploy command failed on the remote host",
+            recovery_message="inspect the helper container deployment logs and rerun bootstrap after correcting the failure",
+        )
+        return json.loads(raw)
+
     runtime_root = f"{state_root}/runtime"
     pythonpath = ":".join(
         [
