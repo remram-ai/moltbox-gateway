@@ -49,6 +49,10 @@ def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str
     return subprocess.run(["git", *args], cwd=str(cwd) if cwd else None, capture_output=True, text=True, check=False)
 
 
+def _mark_safe_directory(checkout_dir: Path) -> None:
+    _git("config", "--global", "--add", "safe.directory", str(checkout_dir))
+
+
 def _require_repo_url(name: str, url: str | None) -> str:
     if url:
         return url
@@ -138,6 +142,7 @@ def _ensure_checkout(config: GatewayConfig, name: str, url: str | None) -> RepoC
                 checkout_dir=str(checkout_dir),
             )
         else:
+            _mark_safe_directory(checkout_dir)
             pulled = _git("-C", str(checkout_dir), "pull", "--ff-only")
             if pulled.returncode != 0:
                 raise ConfigError(
@@ -147,6 +152,7 @@ def _ensure_checkout(config: GatewayConfig, name: str, url: str | None) -> RepoC
                     checkout_dir=str(checkout_dir),
                     git_stderr=pulled.stderr.strip(),
                 )
+    _mark_safe_directory(checkout_dir)
     head = _git("-C", str(checkout_dir), "rev-parse", "HEAD")
     if head.returncode != 0:
         raise ConfigError(

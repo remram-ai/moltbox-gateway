@@ -97,6 +97,35 @@ def test_services_repo_checkout_is_serialized_for_parallel_calls(tmp_path: Path,
     assert second.result() == ["services/caddy"]
 
 
+def test_services_repo_checkout_marks_cached_repo_as_safe_directory(tmp_path: Path, monkeypatch) -> None:
+    services_repo = create_git_repo(
+        tmp_path / "moltbox-services",
+        {
+            "services/caddy/compose.yml.template": "services:\n  caddy:\n    image: caddy:latest\n",
+        },
+    )
+    monkeypatch.setenv("MOLTBOX_STATE_ROOT", str(tmp_path / ".remram"))
+    monkeypatch.setenv("MOLTBOX_RUNTIME_ROOT", str(tmp_path / "Moltbox"))
+    monkeypatch.setenv("MOLTBOX_SERVICES_REPO_URL", str(services_repo))
+    config = resolve_config(Args())
+    checkout_dir = config.layout.repos_root / "moltbox-services"
+    checkout_dir.parent.mkdir(parents=True, exist_ok=True)
+    _ = repo_adapters.list_services(config)
+
+    commands: list[tuple[str, ...]] = []
+    real_git = repo_adapters._git
+
+    def recording_git(*args: str, cwd: Path | None = None):
+        commands.append(tuple(args))
+        return real_git(*args, cwd=cwd)
+
+    monkeypatch.setattr(repo_adapters, "_git", recording_git)
+
+    _ = repo_adapters.list_services(config)
+
+    assert ("config", "--global", "--add", "safe.directory", str(checkout_dir)) in commands
+
+
 def test_runtime_config_sync_reads_external_runtime_repository(tmp_path: Path, monkeypatch) -> None:
     runtime_repo = create_git_repo(
         tmp_path / "moltbox-runtime",
