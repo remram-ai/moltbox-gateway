@@ -22,7 +22,7 @@ func NewHTTPClient(baseURL string) *HTTPClient {
 	return &HTTPClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 10 * time.Minute,
 		},
 	}
 }
