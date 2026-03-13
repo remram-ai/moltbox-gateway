@@ -11,7 +11,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/gateway ./cmd/gateway
 
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose
+ARG DOCKER_COMPOSE_VERSION=v2.40.2
+
+RUN apk add --no-cache ca-certificates curl docker-cli \
+ && mkdir -p /usr/libexec/docker/cli-plugins \
+ && curl -fsSL -o /usr/libexec/docker/cli-plugins/docker-compose "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-x86_64" \
+ && chmod +x /usr/libexec/docker/cli-plugins/docker-compose \
+ && docker compose version
 
 COPY --from=build /out/gateway /usr/local/bin/gateway
 
