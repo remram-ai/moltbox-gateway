@@ -68,7 +68,7 @@ func TestInspectContainer(t *testing.T) {
 			switch request.URL.Path {
 			case "/containers/gateway/json":
 				writer.Header().Set("Content-Type", "application/json")
-				_, _ = writer.Write([]byte(`{"Name":"/gateway","Config":{"Image":"moltbox-gateway:phase1"},"State":{"Status":"running","Running":true}}`))
+				_, _ = writer.Write([]byte(`{"Name":"/gateway","Config":{"Image":"moltbox-gateway:latest"},"State":{"Status":"running","Running":true}}`))
 			case "/containers/missing/json":
 				http.NotFound(writer, request)
 			default:
