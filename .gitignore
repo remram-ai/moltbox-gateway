@@ -8,3 +8,11 @@ archive/*
 !archive/MoltBox-Legacy/
 archive/MoltBox-Legacy/*
 !archive/MoltBox-Legacy/README.md
+!archive/legacy-implementation/
+!archive/legacy-implementation/**
+!archive/runtime-snapshot/
+!archive/runtime-snapshot/**
+archive/legacy-implementation/**/__pycache__/
+archive/legacy-implementation/**/*.pyc
+archive/legacy-implementation/**/.pytest_cache/
+archive/legacy-implementation/**/*.egg-info/
