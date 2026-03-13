@@ -1,0 +1,20 @@
+# Moltbox Gateway
+
+`moltbox-gateway` owns the Moltbox control plane and the `moltbox` CLI.
+
+This repository is the implementation surface. Architecture, feature definitions, and the canonical CLI taxonomy live in the sibling `remram` repository.
+
+Start with:
+
+- `../remram/docs/ai-context/roles/builders.md`
+- `../remram/docs/platform/repositories.md`
+- `../remram/docs/platform/cli-architecture.md`
+- `../remram/docs/reference/cli-reference.md`
+
+Phase 1 is a bootstrap-only Go rebuild:
+
+- the legacy Python implementation is preserved under `archive/legacy-implementation/`
+- the new CLI implements routing only
+- `moltbox gateway docker ping` verifies Docker connectivity without starting containers
+
+Future service images and orchestration flows should come from `moltbox-services`, with gateway treated as a service there.
