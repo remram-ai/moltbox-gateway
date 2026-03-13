@@ -12,6 +12,9 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,10 +30,15 @@ type ContainerInspector interface {
 	InspectContainer(ctx context.Context, name string) (docker.ContainerInfo, error)
 }
 
+type SecretResolver interface {
+	Resolve(scope string, names []string) (map[string]string, error)
+}
+
 type Manager struct {
-	config    config.Config
-	inspector ContainerInspector
-	runner    command.Runner
+	config         config.Config
+	inspector      ContainerInspector
+	runner         command.Runner
+	secretResolver SecretResolver
 }
 
 type ServiceDefinition struct {
@@ -41,21 +49,23 @@ type ServiceDefinition struct {
 	SkipPull bool
 }
 
-func NewManager(cfg config.Config, inspector ContainerInspector, runner command.Runner) *Manager {
+func NewManager(cfg config.Config, inspector ContainerInspector, runner command.Runner, secretResolver SecretResolver) *Manager {
 	return &Manager{
-		config:    cfg,
-		inspector: inspector,
-		runner:    runner,
+		config:         cfg,
+		inspector:      inspector,
+		runner:         runner,
+		secretResolver: secretResolver,
 	}
 }
 
 func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service string) (cli.ServiceDeployResult, error) {
-	definition, err := m.LoadServiceDefinition(service)
+	canonicalService := canonicalServiceName(service)
+	definition, err := m.LoadServiceDefinition(canonicalService)
 	if err != nil {
 		return cli.ServiceDeployResult{}, err
 	}
 
-	outputDir, commandArgs, err := m.RenderServiceAssets(service, definition)
+	outputDir, commandArgs, err := m.RenderServiceAssets(canonicalService, definition)
 	if err != nil {
 		return cli.ServiceDeployResult{}, err
 	}
@@ -155,7 +165,8 @@ func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.Serv
 }
 
 func (m *Manager) RestartService(ctx context.Context, route *cli.Route, service string) (cli.ServiceActionResult, error) {
-	definition, err := m.LoadServiceDefinition(service)
+	canonicalService := canonicalServiceName(service)
+	definition, err := m.LoadServiceDefinition(canonicalService)
 	if err != nil {
 		return cli.ServiceActionResult{}, err
 	}
@@ -185,7 +196,8 @@ func (m *Manager) RestartService(ctx context.Context, route *cli.Route, service 
 }
 
 func (m *Manager) ServiceStatus(ctx context.Context, route *cli.Route, service string) (cli.ServiceStatusResult, error) {
-	definition, err := m.LoadServiceDefinition(service)
+	canonicalService := canonicalServiceName(service)
+	definition, err := m.LoadServiceDefinition(canonicalService)
 	if err != nil {
 		return cli.ServiceStatusResult{}, err
 	}
@@ -268,10 +280,23 @@ func (m *Manager) RuntimeOpenClaw(ctx context.Context, route *cli.Route) (cli.Co
 
 func (m *Manager) RuntimeReload(ctx context.Context, route *cli.Route) (cli.ServiceActionResult, error) {
 	service := route.Runtime
-	return m.RestartService(ctx, route, service)
+	deployResult, err := m.DeployService(ctx, route, service)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	return cli.ServiceActionResult{
+		OK:         true,
+		Route:      route,
+		Service:    service,
+		Action:     route.Action,
+		Command:    deployResult.Command,
+		Containers: deployResult.Containers,
+	}, nil
 }
 
 func (m *Manager) LoadServiceDefinition(service string) (ServiceDefinition, error) {
+	service = canonicalServiceName(service)
 	path := filepath.Join(m.config.ServicesRepoRoot(), "services", service, "service.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -324,6 +349,7 @@ func (m *Manager) LoadServiceDefinition(service string) (ServiceDefinition, erro
 }
 
 func (m *Manager) RenderServiceAssets(service string, definition ServiceDefinition) (string, []string, error) {
+	service = canonicalServiceName(service)
 	serviceRoot := filepath.Join(m.config.ServicesRepoRoot(), "services", service)
 	outputDir := m.config.ServiceStateDir(service)
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -337,6 +363,9 @@ func (m *Manager) RenderServiceAssets(service string, definition ServiceDefiniti
 		return "", nil, err
 	}
 	if err := m.renderCompose(service, definition, serviceRoot, outputDir); err != nil {
+		return "", nil, err
+	}
+	if err := m.renderComposeEnvFile(service, outputDir); err != nil {
 		return "", nil, err
 	}
 
@@ -416,7 +445,10 @@ func (m *Manager) renderConfigAssets(service, outputDir string) error {
 		modelsDir := filepath.Join(outputDir, "shared", "models")
 		return os.MkdirAll(modelsDir, 0o755)
 	case "openclaw-dev", "openclaw-test", "openclaw-prod":
-		return m.renderRuntimeTree(service, filepath.Join(m.config.RuntimeRepoRoot(), service), filepath.Join(outputDir, "config", service))
+		if err := m.renderRuntimeTree(service, filepath.Join(m.config.RuntimeRepoRoot(), service), filepath.Join(outputDir, "config", service)); err != nil {
+			return err
+		}
+		return m.stageRuntimeSkills(service)
 	default:
 		return nil
 	}
@@ -459,6 +491,97 @@ func (m *Manager) renderCompose(service string, definition ServiceDefinition, se
 	return renderFile(templatePath, filepath.Join(outputDir, "compose.yml"), context)
 }
 
+func (m *Manager) renderComposeEnvFile(service, outputDir string) error {
+	if m.secretResolver == nil {
+		return nil
+	}
+
+	composePath := filepath.Join(outputDir, "compose.yml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return fmt.Errorf("read rendered compose for %s: %w", service, err)
+	}
+
+	matches := regexp.MustCompile(`\$\{([A-Z0-9_]+)(?::-[^}]*)?\}`).FindAllStringSubmatch(string(data), -1)
+	secretNames := make([]string, 0, len(matches))
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		name := match[1]
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		secretNames = append(secretNames, name)
+	}
+	sort.Strings(secretNames)
+
+	resolved, err := m.secretResolver.Resolve(secretScopeForService(service), secretNames)
+	if err != nil {
+		return fmt.Errorf("resolve compose secrets for %s: %w", service, err)
+	}
+
+	lines := make([]string, 0, len(secretNames))
+	for _, name := range secretNames {
+		value, ok := resolved[name]
+		if !ok {
+			continue
+		}
+		lines = append(lines, name+"="+strconv.Quote(value))
+	}
+	content := strings.Join(lines, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	return os.WriteFile(filepath.Join(outputDir, ".env"), []byte(content), 0o600)
+}
+
+func (m *Manager) stageRuntimeSkills(service string) error {
+	skillsRoot := filepath.Join(m.config.SkillsRepoRoot(), "skills")
+	if strings.TrimSpace(m.config.SkillsRepoRoot()) == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(skillsRoot)
+	if err != nil {
+		if errorsIsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read skills repo: %w", err)
+	}
+
+	destinationRoot := filepath.Join(m.config.RuntimeComponentDir(service), "skills")
+	if err := os.MkdirAll(destinationRoot, 0o755); err != nil {
+		return fmt.Errorf("create runtime skills dir for %s: %w", service, err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		sourceDir := filepath.Join(skillsRoot, entry.Name())
+		skillFile := filepath.Join(sourceDir, "SKILL.md")
+		if info, err := os.Stat(skillFile); err != nil || info.IsDir() {
+			if err == nil {
+				continue
+			}
+			if errorsIsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("stat skill %s: %w", entry.Name(), err)
+		}
+
+		if err := copyTree(sourceDir, filepath.Join(destinationRoot, entry.Name())); err != nil {
+			return fmt.Errorf("stage skill %s for %s: %w", entry.Name(), service, err)
+		}
+	}
+
+	return nil
+}
+
 func (m *Manager) renderContext(service string) map[string]string {
 	profile := strings.TrimPrefix(service, "openclaw-")
 	context := map[string]string{
@@ -468,6 +591,7 @@ func (m *Manager) renderContext(service string) map[string]string {
 		"state_root":              m.config.Paths.StateRoot,
 		"runtime_root":            m.config.Paths.RuntimeRoot,
 		"logs_root":               m.config.Paths.LogsRoot,
+		"secrets_root":            m.config.Paths.SecretsRoot,
 		"runtime_component_dir":   m.config.RuntimeComponentDir(service),
 		"internal_network_name":   internalNetworkName,
 		"gateway_container_name":  "gateway",
@@ -595,6 +719,32 @@ func runtimeGatewayPort(service string) int {
 	}
 }
 
+func canonicalServiceName(service string) string {
+	switch service {
+	case "dev":
+		return "openclaw-dev"
+	case "test":
+		return "openclaw-test"
+	case "prod":
+		return "openclaw-prod"
+	default:
+		return service
+	}
+}
+
+func secretScopeForService(service string) string {
+	switch service {
+	case "openclaw-dev":
+		return "dev"
+	case "openclaw-test":
+		return "test"
+	case "openclaw-prod":
+		return "prod"
+	default:
+		return "service"
+	}
+}
+
 func splitYAMLLine(line string) (string, string, bool) {
 	index := strings.Index(line, ":")
 	if index < 0 {
@@ -680,4 +830,35 @@ func ensureCaddyTLSAssets(certsDir string) error {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func copyTree(source, destination string) error {
+	return filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, relative)
+
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+}
+
+func errorsIsNotExist(err error) bool {
+	return err != nil && os.IsNotExist(err)
 }

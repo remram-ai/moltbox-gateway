@@ -24,6 +24,7 @@ const (
 	KindGateway        = "gateway"
 	KindGatewayService = "gateway_service"
 	KindGatewayDocker  = "gateway_docker"
+	KindScopedSecrets  = "scoped_secrets"
 	KindRuntimeAction  = "runtime_action"
 	KindRuntimeNative  = "runtime_openclaw"
 	KindServiceNative  = "service_passthrough"
@@ -31,7 +32,6 @@ const (
 
 var retiredNamespaces = map[string]struct{}{
 	"runtime":       {},
-	"service":       {},
 	"skill":         {},
 	"tools":         {},
 	"host":          {},
@@ -68,6 +68,17 @@ type Envelope struct {
 type RouteRequest struct {
 	Route   *Route `json:"route,omitempty"`
 	Service string `json:"service,omitempty"`
+}
+
+type SecretSetRequest struct {
+	Scope       string `json:"scope"`
+	Name        string `json:"name"`
+	Value       string `json:"value"`
+}
+
+type SecretDeleteRequest struct {
+	Scope       string `json:"scope"`
+	Name        string `json:"name"`
 }
 
 type DockerRunRequest struct {
@@ -161,6 +172,34 @@ type CommandResult struct {
 	ExitCode      int      `json:"exit_code"`
 }
 
+type SecretSetResult struct {
+	OK     bool   `json:"ok"`
+	Route  *Route `json:"route,omitempty"`
+	Scope  string `json:"scope"`
+	Name   string `json:"name"`
+	Stored bool   `json:"stored"`
+}
+
+type SecretDeleteResult struct {
+	OK      bool   `json:"ok"`
+	Route   *Route `json:"route,omitempty"`
+	Scope   string `json:"scope"`
+	Name    string `json:"name"`
+	Deleted bool   `json:"deleted"`
+}
+
+type SecretListItem struct {
+	Scope string `json:"scope"`
+	Name  string `json:"name"`
+}
+
+type SecretListResult struct {
+	OK      bool             `json:"ok"`
+	Route   *Route           `json:"route,omitempty"`
+	Scope   string           `json:"scope,omitempty"`
+	Secrets []SecretListItem `json:"secrets"`
+}
+
 type ParseResult struct {
 	Route    *Route
 	Envelope *Envelope
@@ -188,7 +227,7 @@ func Parse(args []string) ParseResult {
 			Envelope: Error(nil,
 				"retired_namespace",
 				fmt.Sprintf("'%s' is a retired top-level namespace", resource),
-				"use one of: gateway, dev, test, prod, ollama, opensearch, caddy",
+				"use one of: gateway, dev, test, prod, service, ollama, opensearch, caddy",
 			),
 			Code: ExitParseError,
 		}
@@ -199,6 +238,8 @@ func Parse(args []string) ParseResult {
 		return parseGateway(args)
 	case "dev", "test", "prod":
 		return parseRuntime(args)
+	case "service":
+		return parseServiceScope(args)
 	case "ollama", "opensearch", "caddy":
 		return parseServicePassthrough(args)
 	default:
@@ -206,7 +247,7 @@ func Parse(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown resource '%s'", resource),
-				"use one of: gateway, dev, test, prod, ollama, opensearch, caddy",
+				"use one of: gateway, dev, test, prod, service, ollama, opensearch, caddy",
 			),
 			Code: ExitParseError,
 		}
@@ -326,7 +367,7 @@ func parseRuntime(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("missing command for environment '%s'", args[0]),
-				fmt.Sprintf("use: %s reload|checkpoint|openclaw <command>", args[0]),
+				fmt.Sprintf("use: %s reload|checkpoint|openclaw <command>|secrets <command>", args[0]),
 			),
 			Code: ExitParseError,
 		}
@@ -369,12 +410,92 @@ func parseRuntime(args []string) ParseResult {
 		route.Action = "openclaw"
 		route.NativeArgs = append([]string(nil), args[2:]...)
 		return ParseResult{Route: route}
+	case "secrets":
+		return parseScopedSecrets(args[0], args)
 	default:
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown environment command '%s'", args[1]),
-				fmt.Sprintf("use: %s reload|checkpoint|openclaw <command>", args[0]),
+				fmt.Sprintf("use: %s reload|checkpoint|openclaw <command>|secrets <command>", args[0]),
+			),
+			Code: ExitParseError,
+		}
+	}
+}
+
+func parseServiceScope(args []string) ParseResult {
+	if len(args) < 2 || args[1] != "secrets" {
+		return ParseResult{
+			Envelope: Error(nil,
+				"retired_namespace",
+				"'service' is only valid for scoped secrets commands",
+				"use: service secrets set <NAME> | service secrets list | service secrets delete <NAME>",
+			),
+			Code: ExitParseError,
+		}
+	}
+	return parseScopedSecrets("service", args)
+}
+
+func parseScopedSecrets(scope string, args []string) ParseResult {
+	if len(args) < 3 {
+		return ParseResult{
+			Envelope: Error(nil,
+				"parse_error",
+				fmt.Sprintf("missing secrets command for scope '%s'", scope),
+				fmt.Sprintf("use: %s secrets set <NAME> | %s secrets list | %s secrets delete <NAME>", scope, scope, scope),
+			),
+			Code: ExitParseError,
+		}
+	}
+
+	switch args[2] {
+	case "list":
+		if len(args) != 3 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("unexpected arguments after '%s secrets list'", scope),
+					fmt.Sprintf("use: %s secrets list", scope),
+				),
+				Code: ExitParseError,
+			}
+		}
+		return ParseResult{
+			Route: &Route{
+				Resource: scope,
+				Kind:     KindScopedSecrets,
+				Tokens:   append([]string(nil), args...),
+				Action:   "list",
+			},
+		}
+	case "set", "delete":
+		if len(args) != 4 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("invalid %s secrets %s command", scope, args[2]),
+					fmt.Sprintf("use: %s secrets %s <NAME>", scope, args[2]),
+				),
+				Code: ExitParseError,
+			}
+		}
+		return ParseResult{
+			Route: &Route{
+				Resource: scope,
+				Kind:     KindScopedSecrets,
+				Tokens:   append([]string(nil), args...),
+				Action:   args[2],
+				Subject:  args[3],
+			},
+		}
+	default:
+		return ParseResult{
+			Envelope: Error(nil,
+				"parse_error",
+				fmt.Sprintf("unknown secrets command '%s'", args[2]),
+				fmt.Sprintf("use: %s secrets set <NAME> | %s secrets list | %s secrets delete <NAME>", scope, scope, scope),
 			),
 			Code: ExitParseError,
 		}
@@ -498,10 +619,18 @@ Resources:
     reload
     checkpoint
     openclaw <command>
+    secrets set <name>
+    secrets list
+    secrets delete <name>
+
+  service
+    secrets set <name>
+    secrets list
+    secrets delete <name>
 
   ollama|opensearch|caddy
     <native command>
 
 Retired namespaces fail explicitly:
-  runtime, service, skill, tools, host, openclaw-dev, openclaw-test, openclaw-prod
+  runtime, skill, tools, host, openclaw-dev, openclaw-test, openclaw-prod
 `

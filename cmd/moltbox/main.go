@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/remram-ai/moltbox-gateway/internal/client"
+	appconfig "github.com/remram-ai/moltbox-gateway/internal/config"
+	"github.com/remram-ai/moltbox-gateway/internal/secrets"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
 
@@ -28,6 +32,44 @@ func run(args []string, stdout, _ io.Writer) int {
 		return result.Code
 	}
 
+	if result.Route != nil && result.Route.Kind == cli.KindScopedSecrets {
+		cfg, err := appconfig.Load(appconfig.ConfigPath())
+		if err != nil {
+			_ = cli.WriteJSON(stdout, cli.Error(
+				result.Route,
+				"config_load_failed",
+				fmt.Sprintf("failed to load gateway config from %s", appconfig.ConfigPath()),
+				err.Error(),
+			))
+			return cli.ExitFailure
+		}
+
+		secretValue := ""
+		if result.Route.Action == "set" {
+			secretValue, err = loadSecretValue(os.Stdin)
+			if err != nil {
+				_ = cli.WriteJSON(stdout, cli.Error(
+					result.Route,
+					"secret_input_missing",
+					"failed to read secret input",
+					err.Error(),
+				))
+				return cli.ExitFailure
+			}
+		}
+
+		handler := secrets.NewHandler(cfg.Paths.SecretsRoot)
+		payload := handler.Execute(result.Route, secretValue)
+		var buffer bytes.Buffer
+		if err := cli.WriteJSON(&buffer, payload); err != nil {
+			return cli.ExitFailure
+		}
+		if _, err := stdout.Write(buffer.Bytes()); err != nil {
+			return cli.ExitFailure
+		}
+		return cli.ExitCodeFromPayload(buffer.Bytes())
+	}
+
 	gatewayClient := client.NewHTTPClient(cli.GatewayURL())
 	payload, err := gatewayClient.Execute(result.Route)
 	if err != nil {
@@ -45,4 +87,20 @@ func run(args []string, stdout, _ io.Writer) int {
 	}
 
 	return cli.ExitCodeFromPayload(payload)
+}
+
+func loadSecretValue(stdin io.Reader) (string, error) {
+	if value, ok := os.LookupEnv("MOLTBOX_SECRET_VALUE"); ok && value != "" {
+		return value, nil
+	}
+
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimRight(string(data), "\r\n")
+	if value == "" {
+		return "", fmt.Errorf("pipe the secret value on stdin or set MOLTBOX_SECRET_VALUE")
+	}
+	return value, nil
 }

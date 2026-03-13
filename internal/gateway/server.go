@@ -8,6 +8,7 @@ import (
 	appconfig "github.com/remram-ai/moltbox-gateway/internal/config"
 	"github.com/remram-ai/moltbox-gateway/internal/docker"
 	"github.com/remram-ai/moltbox-gateway/internal/orchestrator"
+	"github.com/remram-ai/moltbox-gateway/internal/secrets"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
 
@@ -37,6 +38,9 @@ func NewServer(config Config) *Server {
 	if appCfg.Paths.LogsRoot == "" {
 		appCfg.Paths.LogsRoot = defaults.Paths.LogsRoot
 	}
+	if appCfg.Paths.SecretsRoot == "" {
+		appCfg.Paths.SecretsRoot = defaults.Paths.SecretsRoot
+	}
 	if appCfg.Gateway.Host == "" {
 		appCfg.Gateway.Host = defaults.Gateway.Host
 	}
@@ -63,13 +67,14 @@ func NewServer(config Config) *Server {
 	}
 
 	dockerClient := docker.NewClient(dockerSocketPath)
+	secretHandler := secrets.NewHandler(appCfg.Paths.SecretsRoot)
 
 	return &Server{
 		listenAddress:    listenAddress,
 		dockerSocketPath: dockerSocketPath,
 		dockerClient:     dockerClient,
 		appConfig:        appCfg,
-		orchestrator:     orchestrator.NewManager(appCfg, dockerClient, runner),
+		orchestrator:     orchestrator.NewManager(appCfg, dockerClient, runner, secretHandler),
 	}
 }
 

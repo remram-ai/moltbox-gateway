@@ -42,6 +42,20 @@ func (f fakeInspector) InspectContainer(_ context.Context, name string) (docker.
 	return info, nil
 }
 
+type fakeSecretResolver struct {
+	values map[string]map[string]string
+}
+
+func (f fakeSecretResolver) Resolve(scope string, names []string) (map[string]string, error) {
+	resolved := make(map[string]string, len(names))
+	for _, name := range names {
+		if value, ok := f.values[scope][name]; ok {
+			resolved[name] = value
+		}
+	}
+	return resolved, nil
+}
+
 func TestRenderServiceAssetsForRuntimeService(t *testing.T) {
 	t.Parallel()
 
@@ -67,7 +81,7 @@ func TestRenderServiceAssetsForRuntimeService(t *testing.T) {
 			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
 		},
 		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
-	}, fakeInspector{}, &fakeRunner{})
+	}, fakeInspector{}, &fakeRunner{}, nil)
 
 	definition, err := manager.LoadServiceDefinition("openclaw-dev")
 	if err != nil {
@@ -100,6 +114,104 @@ func TestRenderServiceAssetsForRuntimeService(t *testing.T) {
 	}
 }
 
+func TestRenderServiceAssetsWritesScopedSecretEnvFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	runtimeRoot := filepath.Join(root, "runtime-repo")
+	stateRoot := filepath.Join(root, "state")
+	skillsRoot := filepath.Join(root, "skills-repo")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-dev", "service.yaml"), "compose_project: openclaw-dev\ncontainer_names:\n  - openclaw-dev\nruntime_required: true\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-dev", "compose.yml.template"), "services:\n  {{ service_name }}:\n    environment:\n      TOGETHER_API_KEY: \"${TOGETHER_API_KEY:-}\"\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "openclaw-dev", "openclaw.json.template"), "{}\n")
+	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "together-escalation", "SKILL.md"), "---\nname: together-escalation\ndescription: test\n---\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+			SecretsRoot: filepath.Join(root, "secrets"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
+			Skills:   appconfig.RepoConfig{URL: skillsRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, fakeSecretResolver{
+		values: map[string]map[string]string{
+			"dev": {
+				"TOGETHER_API_KEY": "scoped-dev-secret",
+			},
+		},
+	})
+
+	definition, err := manager.LoadServiceDefinition("openclaw-dev")
+	if err != nil {
+		t.Fatalf("LoadServiceDefinition() error = %v", err)
+	}
+
+	outputDir, _, err := manager.RenderServiceAssets("openclaw-dev", definition)
+	if err != nil {
+		t.Fatalf("RenderServiceAssets() error = %v", err)
+	}
+
+	envData, err := os.ReadFile(filepath.Join(outputDir, ".env"))
+	if err != nil {
+		t.Fatalf("read rendered .env: %v", err)
+	}
+	if !strings.Contains(string(envData), `TOGETHER_API_KEY="scoped-dev-secret"`) {
+		t.Fatalf("rendered .env missing scoped secret: %s", envData)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "runtime-state", "openclaw-dev", "skills", "together-escalation", "SKILL.md")); err != nil {
+		t.Fatalf("staged skill missing from runtime state: %v", err)
+	}
+}
+
+func TestRenderServiceAssetsSupportsEnvironmentAlias(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	runtimeRoot := filepath.Join(root, "runtime-repo")
+	stateRoot := filepath.Join(root, "state")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-dev", "service.yaml"), "compose_project: openclaw-dev\ncontainer_names:\n  - openclaw-dev\nruntime_required: true\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-dev", "compose.yml.template"), "services:\n  {{ service_name }}:\n    container_name: \"{{ container_name }}\"\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "openclaw-dev", "openclaw.json.template"), "{}\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, nil)
+
+	definition, err := manager.LoadServiceDefinition("dev")
+	if err != nil {
+		t.Fatalf("LoadServiceDefinition(dev) error = %v", err)
+	}
+
+	outputDir, _, err := manager.RenderServiceAssets("dev", definition)
+	if err != nil {
+		t.Fatalf("RenderServiceAssets(dev) error = %v", err)
+	}
+
+	if !strings.HasSuffix(outputDir, filepath.Join("services", "openclaw-dev")) {
+		t.Fatalf("RenderServiceAssets(dev) outputDir = %q, want openclaw-dev state dir", outputDir)
+	}
+}
+
 func TestRenderServiceAssetsForCaddyGeneratesTLSAssets(t *testing.T) {
 	t.Parallel()
 
@@ -123,7 +235,7 @@ func TestRenderServiceAssetsForCaddyGeneratesTLSAssets(t *testing.T) {
 			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
 		},
 		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
-	}, fakeInspector{}, &fakeRunner{})
+	}, fakeInspector{}, &fakeRunner{}, nil)
 
 	definition, err := manager.LoadServiceDefinition("caddy")
 	if err != nil {
@@ -188,7 +300,7 @@ func TestDeployServiceRunsComposeAndInspectsContainers(t *testing.T) {
 		containers: map[string]docker.ContainerInfo{
 			"gateway": containerInfo,
 		},
-	}, runner)
+	}, runner, nil)
 
 	result, err := manager.DeployService(context.Background(), &cli.Route{Resource: "gateway", Kind: cli.KindGatewayService, Action: "deploy", Subject: "gateway"}, "gateway")
 	if err != nil {
@@ -236,7 +348,7 @@ func TestGatewayUpdateStartsHelperContainer(t *testing.T) {
 			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
 		},
 		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
-	}, fakeInspector{}, runner)
+	}, fakeInspector{}, runner, nil)
 
 	result, err := manager.GatewayUpdate(context.Background(), &cli.Route{Resource: "gateway", Kind: cli.KindGateway, Action: "update", Subject: "gateway"})
 	if err != nil {

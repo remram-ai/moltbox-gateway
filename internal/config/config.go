@@ -22,6 +22,7 @@ type PathsConfig struct {
 	StateRoot   string
 	RuntimeRoot string
 	LogsRoot    string
+	SecretsRoot string
 }
 
 type ReposConfig struct {
@@ -49,6 +50,7 @@ func Default() Config {
 			StateRoot:   "/srv/moltbox-state",
 			RuntimeRoot: "/srv/moltbox-state/runtime",
 			LogsRoot:    "/srv/moltbox-logs",
+			SecretsRoot: "/var/lib/moltbox/secrets",
 		},
 		Gateway: GatewayConfig{
 			Host: "0.0.0.0",
@@ -117,6 +119,8 @@ func Load(path string) (Config, error) {
 				cfg.Paths.RuntimeRoot = value
 			case "logs_root":
 				cfg.Paths.LogsRoot = value
+			case "secrets_root":
+				cfg.Paths.SecretsRoot = value
 			}
 		case indent == 2 && section == "gateway":
 			switch key {
@@ -181,6 +185,10 @@ func (c Config) ServicesRepoRoot() string {
 
 func (c Config) RuntimeRepoRoot() string {
 	return strings.TrimSpace(c.Repos.Runtime.URL)
+}
+
+func (c Config) SkillsRepoRoot() string {
+	return strings.TrimSpace(c.Repos.Skills.URL)
 }
 
 func (c Config) ServiceStateDir(service string) string {

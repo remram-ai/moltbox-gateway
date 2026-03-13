@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -273,7 +275,6 @@ func TestRetiredNamespacesFailExplicitly(t *testing.T) {
 
 	retired := []string{
 		"runtime",
-		"service",
 		"skill",
 		"tools",
 		"host",
@@ -357,6 +358,51 @@ func TestHelpAndVersion(t *testing.T) {
 	}
 	if !strings.Contains(versionOutput.String(), cli.Version) {
 		t.Fatalf("version output missing version: %q", versionOutput.String())
+	}
+}
+
+func TestScopedSecretsCommandsRunLocally(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	secretsRoot := filepath.Join(root, "secrets")
+	if err := os.WriteFile(configPath, []byte(
+		"paths:\n"+
+			"  state_root: /tmp/state\n"+
+			"  runtime_root: /tmp/runtime\n"+
+			"  logs_root: /tmp/logs\n"+
+			"  secrets_root: "+strings.ReplaceAll(secretsRoot, "\\", "/")+"\n"+
+			"gateway:\n"+
+			"  host: 127.0.0.1\n"+
+			"  port: 7460\n",
+	), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	t.Setenv("MOLTBOX_CONFIG_PATH", configPath)
+	t.Setenv("MOLTBOX_SECRET_VALUE", "local-secret")
+	t.Setenv("MOLTBOX_GATEWAY_URL", "http://127.0.0.1:1")
+
+	var setOutput strings.Builder
+	if code := run([]string{"dev", "secrets", "set", "TOGETHER_API_KEY"}, &setOutput, ioDiscard{}); code != cli.ExitOK {
+		t.Fatalf("set exit code = %d, want %d", code, cli.ExitOK)
+	}
+
+	var listOutput strings.Builder
+	if code := run([]string{"dev", "secrets", "list"}, &listOutput, ioDiscard{}); code != cli.ExitOK {
+		t.Fatalf("list exit code = %d, want %d", code, cli.ExitOK)
+	}
+
+	var listPayload cli.SecretListResult
+	if err := json.Unmarshal([]byte(listOutput.String()), &listPayload); err != nil {
+		t.Fatalf("decode list payload: %v", err)
+	}
+	if len(listPayload.Secrets) != 1 || listPayload.Secrets[0].Name != "TOGETHER_API_KEY" || listPayload.Secrets[0].Scope != "dev" {
+		t.Fatalf("list payload = %#v, want dev/TOGETHER_API_KEY", listPayload.Secrets)
+	}
+
+	var deleteOutput strings.Builder
+	if code := run([]string{"dev", "secrets", "delete", "TOGETHER_API_KEY"}, &deleteOutput, ioDiscard{}); code != cli.ExitOK {
+		t.Fatalf("delete exit code = %d, want %d", code, cli.ExitOK)
 	}
 }
 
