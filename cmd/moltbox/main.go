@@ -2,15 +2,14 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
-	"github.com/remram-ai/moltbox-gateway/internal/client"
 	appconfig "github.com/remram-ai/moltbox-gateway/internal/config"
-	"github.com/remram-ai/moltbox-gateway/internal/secrets"
+	"github.com/remram-ai/moltbox-gateway/internal/localexec"
+	"github.com/remram-ai/moltbox-gateway/internal/mcpstdio"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
 
@@ -18,35 +17,22 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, _ io.Writer) int {
+func run(args []string, stdout, stderr io.Writer) int {
 	result := cli.Parse(args)
 
-	switch {
-	case result.Help:
-		_ = cli.WriteHelp(stdout)
-		return cli.ExitOK
-	case result.Version:
-		_ = cli.WriteVersion(stdout)
-		return cli.ExitOK
-	case result.Envelope != nil:
-		_ = cli.WriteJSON(stdout, result.Envelope)
-		return result.Code
-	}
-
-	if result.Route != nil && result.Route.Kind == cli.KindScopedSecrets {
-		cfg, err := appconfig.Load(appconfig.ConfigPath())
-		if err != nil {
-			_ = cli.WriteJSON(stdout, cli.Error(
-				result.Route,
-				"config_load_failed",
-				fmt.Sprintf("failed to load gateway config from %s", appconfig.ConfigPath()),
-				err.Error(),
-			))
+	if result.Route != nil && result.Route.Kind == cli.KindGatewayMCP {
+		executor := localexec.New(appconfig.ConfigPath(), cli.GatewayURL())
+		if err := mcpstdio.New(executor).Run(os.Stdin, stdout); err != nil {
+			_, _ = fmt.Fprintf(stderr, "mcp stdio server failed: %v\n", err)
 			return cli.ExitFailure
 		}
+		return cli.ExitOK
+	}
 
-		secretValue := ""
+	secretValue := ""
+	if result.Route != nil && result.Route.Kind == cli.KindScopedSecrets {
 		if result.Route.Action == "set" {
+			var err error
 			secretValue, err = loadSecretValue(os.Stdin)
 			if err != nil {
 				_ = cli.WriteJSON(stdout, cli.Error(
@@ -58,36 +44,17 @@ func run(args []string, stdout, _ io.Writer) int {
 				return cli.ExitFailure
 			}
 		}
-
-		handler := secrets.NewHandler(cfg.Paths.SecretsRoot)
-		payload := handler.Execute(result.Route, secretValue)
-		var buffer bytes.Buffer
-		if err := cli.WriteJSON(&buffer, payload); err != nil {
-			return cli.ExitFailure
-		}
-		if _, err := stdout.Write(buffer.Bytes()); err != nil {
-			return cli.ExitFailure
-		}
-		return cli.ExitCodeFromPayload(buffer.Bytes())
 	}
 
-	gatewayClient := client.NewHTTPClient(cli.GatewayURL())
-	payload, err := gatewayClient.Execute(result.Route)
+	payload, code, err := localexec.New(appconfig.ConfigPath(), cli.GatewayURL()).ExecuteParse(result, secretValue)
 	if err != nil {
-		_ = cli.WriteJSON(stdout, cli.Error(
-			result.Route,
-			"gateway_unreachable",
-			fmt.Sprintf("failed to contact gateway at %s", cli.GatewayURL()),
-			"verify the gateway container is running and the localhost control port is reachable",
-		))
+		_, _ = fmt.Fprintf(stderr, "moltbox execution failed: %v\n", err)
 		return cli.ExitFailure
 	}
-
 	if _, err := stdout.Write(payload); err != nil {
 		return cli.ExitFailure
 	}
-
-	return cli.ExitCodeFromPayload(payload)
+	return code
 }
 
 func loadSecretValue(stdin io.Reader) (string, error) {

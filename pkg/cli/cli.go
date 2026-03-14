@@ -24,6 +24,7 @@ const (
 	KindGateway        = "gateway"
 	KindGatewayService = "gateway_service"
 	KindGatewayDocker  = "gateway_docker"
+	KindGatewayMCP     = "gateway_mcp"
 	KindScopedSecrets  = "scoped_secrets"
 	KindRuntimeAction  = "runtime_action"
 	KindRuntimeNative  = "runtime_openclaw"
@@ -71,14 +72,14 @@ type RouteRequest struct {
 }
 
 type SecretSetRequest struct {
-	Scope       string `json:"scope"`
-	Name        string `json:"name"`
-	Value       string `json:"value"`
+	Scope string `json:"scope"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type SecretDeleteRequest struct {
-	Scope       string `json:"scope"`
-	Name        string `json:"name"`
+	Scope string `json:"scope"`
+	Name  string `json:"name"`
 }
 
 type DockerRunRequest struct {
@@ -260,7 +261,7 @@ func parseGateway(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				"missing gateway command",
-				"use: gateway status|update|logs | gateway service <deploy|restart|status> <service> | gateway docker ping",
+				"use: gateway status|update|logs|mcp-stdio | gateway service <deploy|restart|status> <service> | gateway docker ping",
 			),
 			Code: ExitParseError,
 		}
@@ -284,6 +285,25 @@ func parseGateway(args []string) ParseResult {
 				Kind:     KindGateway,
 				Tokens:   append([]string(nil), args...),
 				Action:   args[1],
+			},
+		}
+	case "mcp-stdio":
+		if len(args) != 2 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					"unexpected arguments after 'gateway mcp-stdio'",
+					"use: gateway mcp-stdio",
+				),
+				Code: ExitParseError,
+			}
+		}
+		return ParseResult{
+			Route: &Route{
+				Resource: "gateway",
+				Kind:     KindGatewayMCP,
+				Tokens:   append([]string(nil), args...),
+				Action:   "mcp-stdio",
 			},
 		}
 	case "service":
@@ -354,7 +374,7 @@ func parseGateway(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown gateway command '%s'", args[1]),
-				"use: gateway status|update|logs | gateway service <deploy|restart|status> <service> | gateway docker ping | gateway docker run <image>",
+				"use: gateway status|update|logs|mcp-stdio | gateway service <deploy|restart|status> <service> | gateway docker ping | gateway docker run <image>",
 			),
 			Code: ExitParseError,
 		}
@@ -609,6 +629,7 @@ Resources:
     status
     update
     logs
+    mcp-stdio
     service deploy <service>
     service restart <service>
     service status <service>

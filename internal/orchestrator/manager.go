@@ -5,8 +5,8 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/x509/pkix"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -26,8 +26,6 @@ import (
 
 const internalNetworkName = "moltbox_internal"
 
-const defaultCaddyClientCommonName = "jason-cli"
-
 type ContainerInspector interface {
 	InspectContainer(ctx context.Context, name string) (docker.ContainerInfo, error)
 }
@@ -44,11 +42,11 @@ type Manager struct {
 }
 
 type ServiceDefinition struct {
-	ComposeProject string
-	ContainerNames []string
+	ComposeProject  string
+	ContainerNames  []string
 	RuntimeRequired bool
-	BuildOnDeploy bool
-	SkipPull bool
+	BuildOnDeploy   bool
+	SkipPull        bool
 }
 
 func NewManager(cfg config.Config, inspector ContainerInspector, runner command.Runner, secretResolver SecretResolver) *Manager {
@@ -100,13 +98,13 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 	}
 
 	return cli.ServiceDeployResult{
-		OK:            true,
-		Route:         route,
-		Service:       service,
+		OK:             true,
+		Route:          route,
+		Service:        service,
 		ComposeProject: definition.ComposeProject,
-		OutputDir:     outputDir,
-		Command:       append([]string{"docker"}, commandArgs...),
-		Containers:    containers,
+		OutputDir:      outputDir,
+		Command:        append([]string{"docker"}, commandArgs...),
+		Containers:     containers,
 	}, nil
 }
 
@@ -166,6 +164,8 @@ func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.Serv
 }
 
 func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigPath, updateScript string) []string {
+	bootstrapWrapperPath := "/usr/local/bin/moltbox-bootstrap-wrapper"
+	systemConfigPath := "/etc/moltbox/config.yaml"
 	commandArgs := []string{
 		"run",
 		"-d",
@@ -183,6 +183,8 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 		repoRoot,
 		filepath.Dir(cliPath),
 		filepath.Dir(cliConfigPath),
+		filepath.Dir(bootstrapWrapperPath),
+		filepath.Dir(systemConfigPath),
 	) {
 		commandArgs = append(commandArgs, "-v", fmt.Sprintf("%s:%s", mount, mount))
 	}
@@ -197,6 +199,10 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 }
 
 func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, configSource, gatewayOutputDir, composeProject, secretsRoot string) string {
+	bootstrapWrapperSource := filepath.Join(repoRoot, "scripts", "moltbox-bootstrap-wrapper.sh")
+	bootstrapWrapperPath := "/usr/local/bin/moltbox-bootstrap-wrapper"
+	sharedCLIPath := "/usr/local/bin/moltbox"
+	systemConfigPath := "/etc/moltbox/config.yaml"
 	return strings.Join([]string{
 		"set -eu",
 		fmt.Sprintf("REPO=%s", shellQuote(repoRoot)),
@@ -207,14 +213,24 @@ func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, con
 		fmt.Sprintf("GATEWAY_OUTPUT_DIR=%s", shellQuote(gatewayOutputDir)),
 		fmt.Sprintf("COMPOSE_PROJECT=%s", shellQuote(composeProject)),
 		fmt.Sprintf("SECRETS_ROOT=%s", shellQuote(secretsRoot)),
-		`mkdir -p "$STAGING_ROOT" "$(dirname "$CLI_PATH")" "$(dirname "$CLI_CONFIG_PATH")"`,
+		fmt.Sprintf("BOOTSTRAP_WRAPPER_SOURCE=%s", shellQuote(bootstrapWrapperSource)),
+		fmt.Sprintf("BOOTSTRAP_WRAPPER_PATH=%s", shellQuote(bootstrapWrapperPath)),
+		fmt.Sprintf("SHARED_CLI_PATH=%s", shellQuote(sharedCLIPath)),
+		fmt.Sprintf("SYSTEM_CONFIG_PATH=%s", shellQuote(systemConfigPath)),
+		`mkdir -p "$STAGING_ROOT" "$(dirname "$CLI_PATH")" "$(dirname "$CLI_CONFIG_PATH")" "$(dirname "$SYSTEM_CONFIG_PATH")"`,
 		`mkdir -p "$SECRETS_ROOT"`,
 		`if [ -d "$REPO/.git" ] && git -C "$REPO" remote get-url origin >/dev/null 2>&1; then git -C "$REPO" fetch --all --tags --prune && git -C "$REPO" pull --ff-only; fi`,
 		`docker run --rm -v "$REPO:/src" -v "$STAGING_ROOT:/out" -w /src golang:1.23-bookworm sh -lc 'set -eu; /usr/local/go/bin/go build -buildvcs=false -o /out/moltbox ./cmd/moltbox && /usr/local/go/bin/go build -buildvcs=false -o /out/gateway ./cmd/gateway'`,
 		`cp "$STAGING_ROOT/moltbox" "$CLI_PATH"`,
 		`chmod 0755 "$CLI_PATH"`,
+		`cp "$STAGING_ROOT/moltbox" "$SHARED_CLI_PATH"`,
+		`chmod 0755 "$SHARED_CLI_PATH"`,
 		`cp "$CONFIG_SOURCE" "$CLI_CONFIG_PATH"`,
 		`chmod 0644 "$CLI_CONFIG_PATH"`,
+		`cp "$CONFIG_SOURCE" "$SYSTEM_CONFIG_PATH"`,
+		`chmod 0644 "$SYSTEM_CONFIG_PATH"`,
+		`sed "s|__MOLTBOX_CLI_PATH__|$SHARED_CLI_PATH|g" "$BOOTSTRAP_WRAPPER_SOURCE" > "$BOOTSTRAP_WRAPPER_PATH"`,
+		`chmod 0755 "$BOOTSTRAP_WRAPPER_PATH"`,
 		`CLI_OWNER="$(stat -c '%u:%g' "$(dirname "$CLI_PATH")")"`,
 		`chown -R "$CLI_OWNER" "$SECRETS_ROOT"`,
 		`find "$SECRETS_ROOT" -type d -exec chmod 0700 {} +`,
@@ -270,11 +286,11 @@ func (m *Manager) ServiceStatus(ctx context.Context, route *cli.Route, service s
 	}
 
 	result := cli.ServiceStatusResult{
-		OK:            true,
-		Route:         route,
-		Service:       service,
+		OK:             true,
+		Route:          route,
+		Service:        service,
 		ComposeProject: definition.ComposeProject,
-		Containers:    containers,
+		Containers:     containers,
 	}
 	if len(containers) > 0 {
 		result.ContainerName = containers[0].ContainerName
@@ -294,13 +310,13 @@ func (m *Manager) GatewayLogs(ctx context.Context, route *cli.Route) (cli.Comman
 	}
 
 	return cli.CommandResult{
-		OK:          result.ExitCode == 0,
-		Route:       &routeCopy,
+		OK:            result.ExitCode == 0,
+		Route:         &routeCopy,
 		ContainerName: "gateway",
-		Command:     append([]string{"docker"}, commandArgs...),
-		Stdout:      result.Stdout,
-		Stderr:      result.Stderr,
-		ExitCode:    result.ExitCode,
+		Command:       append([]string{"docker"}, commandArgs...),
+		Stdout:        result.Stdout,
+		Stderr:        result.Stderr,
+		ExitCode:      result.ExitCode,
 	}, nil
 }
 
@@ -366,7 +382,7 @@ func (m *Manager) LoadServiceDefinition(service string) (ServiceDefinition, erro
 	}
 
 	var (
-		definition ServiceDefinition
+		definition   ServiceDefinition
 		inContainers bool
 	)
 
@@ -505,7 +521,6 @@ func (m *Manager) renderConfigAssets(service, outputDir string) error {
 		}
 		return ensureCaddyTLSAssets(
 			filepath.Join(outputDir, "config", "caddy", "certs"),
-			filepath.Join(outputDir, "config", "caddy", "clients"),
 		)
 	case "ollama":
 		modelsDir := filepath.Join(outputDir, "shared", "models")
@@ -651,18 +666,18 @@ func (m *Manager) stageRuntimeSkills(service string) error {
 func (m *Manager) renderContext(service string) map[string]string {
 	profile := strings.TrimPrefix(service, "openclaw-")
 	context := map[string]string{
-		"service_name":            service,
-		"profile":                 profile,
-		"gateway_port":            fmt.Sprintf("%d", runtimeGatewayPort(service)),
-		"state_root":              m.config.Paths.StateRoot,
-		"runtime_root":            m.config.Paths.RuntimeRoot,
-		"logs_root":               m.config.Paths.LogsRoot,
-		"secrets_root":            m.config.Paths.SecretsRoot,
-		"runtime_component_dir":   m.config.RuntimeComponentDir(service),
-		"internal_network_name":   internalNetworkName,
-		"gateway_container_name":  "gateway",
-		"gateway_container_port":  fmt.Sprintf("%d", m.config.Gateway.Port),
-		"shared_root":             filepath.Join(m.config.ServiceStateDir(service), "shared"),
+		"service_name":           service,
+		"profile":                profile,
+		"gateway_port":           fmt.Sprintf("%d", runtimeGatewayPort(service)),
+		"state_root":             m.config.Paths.StateRoot,
+		"runtime_root":           m.config.Paths.RuntimeRoot,
+		"logs_root":              m.config.Paths.LogsRoot,
+		"secrets_root":           m.config.Paths.SecretsRoot,
+		"runtime_component_dir":  m.config.RuntimeComponentDir(service),
+		"internal_network_name":  internalNetworkName,
+		"gateway_container_name": "gateway",
+		"gateway_container_port": fmt.Sprintf("%d", m.config.Gateway.Port),
+		"shared_root":            filepath.Join(m.config.ServiceStateDir(service), "shared"),
 	}
 	return context
 }
@@ -861,7 +876,7 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
-func ensureCaddyTLSAssets(certsDir, clientsDir string) error {
+func ensureCaddyTLSAssets(certsDir string) error {
 	certPath := filepath.Join(certsDir, "local.crt")
 	keyPath := filepath.Join(certsDir, "local.key")
 	requiredDNSNames := []string{
@@ -872,11 +887,7 @@ func ensureCaddyTLSAssets(certsDir, clientsDir string) error {
 	}
 
 	if fileExists(certPath) && fileExists(keyPath) && certificateHasDNSNames(certPath, requiredDNSNames) {
-		certificate, privateKey, err := loadECDSACertificateAndKey(certPath, keyPath)
-		if err != nil {
-			return err
-		}
-		return ensureCaddyClientCertificate(clientsDir, certificate, privateKey, defaultCaddyClientCommonName)
+		return nil
 	}
 	if err := os.MkdirAll(certsDir, 0o755); err != nil {
 		return err
@@ -906,7 +917,7 @@ func ensureCaddyTLSAssets(certsDir, clientsDir string) error {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		DNSNames:             requiredDNSNames,
+		DNSNames:              requiredDNSNames,
 	}
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, privateKey.Public(), privateKey)
@@ -921,8 +932,7 @@ func ensureCaddyTLSAssets(certsDir, clientsDir string) error {
 	if err := writeECDSAPrivateKey(keyPath, privateKey); err != nil {
 		return err
 	}
-
-	return ensureCaddyClientCertificate(clientsDir, template, privateKey, defaultCaddyClientCommonName)
+	return nil
 }
 
 func certificateHasDNSNames(certPath string, requiredNames []string) bool {
@@ -957,98 +967,6 @@ func certificateHasDNSNames(certPath string, requiredNames []string) bool {
 		}
 	}
 	return true
-}
-
-func ensureCaddyClientCertificate(clientsDir string, signingCertificate *x509.Certificate, signingPrivateKey *ecdsa.PrivateKey, commonName string) error {
-	clientDir := filepath.Join(clientsDir, commonName)
-	certPath := filepath.Join(clientDir, commonName+".crt")
-	keyPath := filepath.Join(clientDir, commonName+".key")
-	subject := pkix.Name{
-		CommonName:   commonName,
-		Organization: []string{"Moltbox"},
-	}
-
-	if fileExists(certPath) && fileExists(keyPath) && clientCertificateMatches(certPath, signingCertificate, subject) {
-		return nil
-	}
-	if err := os.MkdirAll(clientDir, 0o700); err != nil {
-		return fmt.Errorf("create caddy client dir: %w", err)
-	}
-
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return fmt.Errorf("generate caddy client key: %w", err)
-	}
-	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return fmt.Errorf("generate caddy client serial: %w", err)
-	}
-	now := time.Now().UTC()
-	template := &x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject:      subject,
-		NotBefore:    now.Add(-1 * time.Hour),
-		NotAfter:     now.AddDate(3, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, template, signingCertificate, privateKey.Public(), signingPrivateKey)
-	if err != nil {
-		return fmt.Errorf("generate caddy client certificate: %w", err)
-	}
-	certBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	if err := os.WriteFile(certPath, certBytes, 0o600); err != nil {
-		return err
-	}
-	return writeECDSAPrivateKey(keyPath, privateKey)
-}
-
-func clientCertificateMatches(certPath string, signingCertificate *x509.Certificate, subject pkix.Name) bool {
-	certificate, err := loadCertificate(certPath)
-	if err != nil {
-		return false
-	}
-	if certificate.Subject.CommonName != subject.CommonName {
-		return false
-	}
-	if len(certificate.Subject.Organization) != len(subject.Organization) {
-		return false
-	}
-	for index, value := range subject.Organization {
-		if certificate.Subject.Organization[index] != value {
-			return false
-		}
-	}
-	if certificate.Issuer.String() != signingCertificate.Subject.String() {
-		return false
-	}
-	if certificate.CheckSignatureFrom(signingCertificate) != nil {
-		return false
-	}
-	hasClientAuth := false
-	for _, usage := range certificate.ExtKeyUsage {
-		if usage == x509.ExtKeyUsageClientAuth {
-			hasClientAuth = true
-			break
-		}
-	}
-	if !hasClientAuth {
-		return false
-	}
-	return true
-}
-
-func loadECDSACertificateAndKey(certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
-	certificate, err := loadCertificate(certPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	privateKey, err := loadECDSAPrivateKey(keyPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	return certificate, privateKey, nil
 }
 
 func loadCertificate(path string) (*x509.Certificate, error) {
@@ -1087,30 +1005,6 @@ func loadCertificates(path string) ([]*x509.Certificate, error) {
 		return nil, fmt.Errorf("decode certificate %s: no PEM block", path)
 	}
 	return certificates, nil
-}
-
-func loadECDSAPrivateKey(path string) (*ecdsa.PrivateKey, error) {
-	pemData, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, fmt.Errorf("decode private key %s: no PEM block", path)
-	}
-	privateKey, err := x509.ParseECPrivateKey(block.Bytes)
-	if err == nil {
-		return privateKey, nil
-	}
-	pkcs8Key, pkcs8Err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if pkcs8Err != nil {
-		return nil, err
-	}
-	ecdsaKey, ok := pkcs8Key.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("private key %s is not ECDSA", path)
-	}
-	return ecdsaKey, nil
 }
 
 func writeECDSAPrivateKey(path string, privateKey *ecdsa.PrivateKey) error {
