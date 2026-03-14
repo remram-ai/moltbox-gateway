@@ -436,10 +436,6 @@ func (s *Server) handleTokenRotate(writer http.ResponseWriter, request *http.Req
 }
 
 func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /mcp"))
-		return
-	}
 	authorized, err := s.tokenManager.ValidateBearerToken(request.Header.Get("Authorization"))
 	if err != nil {
 		s.writeJSON(writer, http.StatusUnauthorized, cli.Error(nil, "unauthorized", "failed to validate MCP token", err.Error()))
@@ -447,6 +443,10 @@ func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if !authorized {
 		s.writeJSON(writer, http.StatusUnauthorized, cli.Error(nil, "unauthorized", "missing or invalid MCP token", "send Authorization: Bearer <token>"))
+		return
+	}
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /mcp"))
 		return
 	}
 
