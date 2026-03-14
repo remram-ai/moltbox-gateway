@@ -68,6 +68,120 @@ func TestParseRuntimeSkillRollback(t *testing.T) {
 	}
 }
 
+func TestParseRuntimeContractAcrossEnvironments(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		args        []string
+		wantKind    string
+		wantAction  string
+		wantSubject string
+		wantEnv     string
+		wantRuntime string
+	}{
+		{
+			name:        "dev skill deploy",
+			args:        []string{"dev", "skill", "deploy", "together"},
+			wantKind:    KindRuntimeSkill,
+			wantAction:  "deploy",
+			wantSubject: "together",
+			wantEnv:     "dev",
+			wantRuntime: "openclaw-dev",
+		},
+		{
+			name:        "dev skill rollback",
+			args:        []string{"dev", "skill", "rollback", "together"},
+			wantKind:    KindRuntimeSkill,
+			wantAction:  "rollback",
+			wantSubject: "together",
+			wantEnv:     "dev",
+			wantRuntime: "openclaw-dev",
+		},
+		{
+			name:        "dev checkpoint",
+			args:        []string{"dev", "checkpoint"},
+			wantKind:    KindRuntimeAction,
+			wantAction:  "checkpoint",
+			wantEnv:     "dev",
+			wantRuntime: "openclaw-dev",
+		},
+		{
+			name:        "test skill deploy",
+			args:        []string{"test", "skill", "deploy", "together"},
+			wantKind:    KindRuntimeSkill,
+			wantAction:  "deploy",
+			wantSubject: "together",
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+		},
+		{
+			name:        "test skill rollback",
+			args:        []string{"test", "skill", "rollback", "together"},
+			wantKind:    KindRuntimeSkill,
+			wantAction:  "rollback",
+			wantSubject: "together",
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+		},
+		{
+			name:        "test checkpoint",
+			args:        []string{"test", "checkpoint"},
+			wantKind:    KindRuntimeAction,
+			wantAction:  "checkpoint",
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+		},
+		{
+			name:        "prod skill deploy",
+			args:        []string{"prod", "skill", "deploy", "together"},
+			wantKind:    KindRuntimeSkill,
+			wantAction:  "deploy",
+			wantSubject: "together",
+			wantEnv:     "prod",
+			wantRuntime: "openclaw-prod",
+		},
+		{
+			name:        "prod skill rollback",
+			args:        []string{"prod", "skill", "rollback", "together"},
+			wantKind:    KindRuntimeSkill,
+			wantAction:  "rollback",
+			wantSubject: "together",
+			wantEnv:     "prod",
+			wantRuntime: "openclaw-prod",
+		},
+		{
+			name:        "prod checkpoint",
+			args:        []string{"prod", "checkpoint"},
+			wantKind:    KindRuntimeAction,
+			wantAction:  "checkpoint",
+			wantEnv:     "prod",
+			wantRuntime: "openclaw-prod",
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := Parse(testCase.args)
+			if result.Route == nil {
+				t.Fatal("Parse() route = nil")
+			}
+			if result.Route.Kind != testCase.wantKind || result.Route.Action != testCase.wantAction {
+				t.Fatalf("Parse() route = %#v, want kind=%s action=%s", result.Route, testCase.wantKind, testCase.wantAction)
+			}
+			if result.Route.Subject != testCase.wantSubject {
+				t.Fatalf("Parse() subject = %q, want %q", result.Route.Subject, testCase.wantSubject)
+			}
+			if result.Route.Environment != testCase.wantEnv || result.Route.Runtime != testCase.wantRuntime {
+				t.Fatalf("Parse() route = %#v, want env=%s runtime=%s", result.Route, testCase.wantEnv, testCase.wantRuntime)
+			}
+		})
+	}
+}
+
 func equalArgs(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

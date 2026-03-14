@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -210,9 +211,9 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 		repoRoot,
 		filepath.Dir(cliPath),
 		filepath.Dir(cliConfigPath),
-		filepath.Dir(cliWrapperPath),
-		filepath.Dir(bootstrapWrapperPath),
-		filepath.Dir(systemConfigPath),
+		path.Dir(cliWrapperPath),
+		path.Dir(bootstrapWrapperPath),
+		path.Dir(systemConfigPath),
 	) {
 		commandArgs = append(commandArgs, "-v", fmt.Sprintf("%s:%s", mount, mount))
 	}
@@ -836,7 +837,7 @@ func uniqueMountRoots(paths ...string) []string {
 	seen := map[string]struct{}{}
 	ordered := make([]string, 0, len(paths))
 	for _, value := range paths {
-		cleaned := strings.TrimSpace(filepath.Clean(value))
+		cleaned := cleanMountRoot(value)
 		if cleaned == "" || cleaned == "." {
 			continue
 		}
@@ -847,6 +848,17 @@ func uniqueMountRoots(paths ...string) []string {
 		ordered = append(ordered, cleaned)
 	}
 	return ordered
+}
+
+func cleanMountRoot(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "/") {
+		return path.Clean(strings.ReplaceAll(trimmed, `\`, `/`))
+	}
+	return filepath.Clean(trimmed)
 }
 
 func shellQuote(value string) string {

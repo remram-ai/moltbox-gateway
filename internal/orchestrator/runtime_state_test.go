@@ -248,6 +248,63 @@ func TestRuntimeSkillRollbackRemovesReplayAndRestoresBaseline(t *testing.T) {
 	}
 }
 
+func TestRuntimeSkillDeploySkipsReplayWhenSkillAlreadyInBaseline(t *testing.T) {
+	t.Parallel()
+
+	manager, runner, store, _, _ := newRuntimeTestManager(t)
+
+	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("initial DeployService() error = %v", err)
+	}
+
+	deployRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeSkill, Action: "deploy", Environment: "dev", Runtime: "openclaw-dev", Subject: "together"}
+	if _, err := manager.RuntimeSkillDeploy(context.Background(), deployRoute); err != nil {
+		t.Fatalf("RuntimeSkillDeploy() error = %v", err)
+	}
+
+	checkpointRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "checkpoint", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.RuntimeCheckpoint(context.Background(), checkpointRoute); err != nil {
+		t.Fatalf("RuntimeCheckpoint() error = %v", err)
+	}
+
+	historyBefore, err := store.ReadDeploymentHistory()
+	if err != nil {
+		t.Fatalf("ReadDeploymentHistory() error = %v", err)
+	}
+	runner.commands = nil
+
+	result, err := manager.RuntimeSkillDeploy(context.Background(), deployRoute)
+	if err != nil {
+		t.Fatalf("RuntimeSkillDeploy() after checkpoint error = %v", err)
+	}
+	if !result.OK || !strings.Contains(result.Message, "already present in baseline checkpoint") {
+		t.Fatalf("deploy result = %#v, want baseline no-op message", result)
+	}
+	if result.EventID != "" || result.DeploymentID != "" {
+		t.Fatalf("deploy result = %#v, want no deployment or replay identifiers for baseline no-op", result)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("baseline no-op should not redeploy runtime, got commands %#v", runner.commands)
+	}
+
+	log, err := store.LoadReplayLog("openclaw-dev")
+	if err != nil {
+		t.Fatalf("LoadReplayLog() error = %v", err)
+	}
+	if len(log.Events) != 0 {
+		t.Fatalf("replay log = %#v, want empty after baseline no-op", log.Events)
+	}
+
+	historyAfter, err := store.ReadDeploymentHistory()
+	if err != nil {
+		t.Fatalf("ReadDeploymentHistory() error = %v", err)
+	}
+	if len(historyAfter) != len(historyBefore) {
+		t.Fatalf("deployment history len = %d, want unchanged %d", len(historyAfter), len(historyBefore))
+	}
+}
+
 func TestRuntimeCheckpointPromotesBaselineAndClearsReplay(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +378,48 @@ func TestRuntimeCheckpointPromotesBaselineAndClearsReplay(t *testing.T) {
 	}
 	if !strings.Contains(string(envData), "OPENCLAW_IMAGE=") || !strings.Contains(string(envData), checkpoint.Image) {
 		t.Fatalf("rendered .env = %s, want checkpoint image %s", envData, checkpoint.Image)
+	}
+}
+
+func TestRuntimeReplayFailsWhenStagedPackageDigestChanges(t *testing.T) {
+	t.Parallel()
+
+	manager, runner, store, _, _ := newRuntimeTestManager(t)
+
+	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("initial DeployService() error = %v", err)
+	}
+
+	deployRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeSkill, Action: "deploy", Environment: "dev", Runtime: "openclaw-dev", Subject: "together"}
+	result, err := manager.RuntimeSkillDeploy(context.Background(), deployRoute)
+	if err != nil {
+		t.Fatalf("RuntimeSkillDeploy() error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(result.PackageDir, "SKILL.md"), []byte("tampered\n"), 0o644); err != nil {
+		t.Fatalf("tamper staged package: %v", err)
+	}
+	runner.commands = nil
+
+	_, err = manager.DeployService(context.Background(), reloadRoute, "dev")
+	if err == nil || !strings.Contains(err.Error(), "package digest mismatch") {
+		t.Fatalf("DeployService() error = %v, want package digest mismatch", err)
+	}
+
+	for _, command := range runner.commands {
+		text := strings.Join(command, " ")
+		if strings.Contains(text, result.PackageDir) {
+			t.Fatalf("replay should fail before docker cp, got command %q", text)
+		}
+	}
+
+	log, err := store.LoadReplayLog("openclaw-dev")
+	if err != nil {
+		t.Fatalf("LoadReplayLog() error = %v", err)
+	}
+	if len(log.Events) != 1 {
+		t.Fatalf("replay log len = %d, want original event preserved", len(log.Events))
 	}
 }
 

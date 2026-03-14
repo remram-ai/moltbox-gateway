@@ -75,6 +75,27 @@ func (m *Manager) RuntimeSkillDeploy(ctx context.Context, route *cli.Route) (cli
 		return cli.RuntimeSkillResult{}, err
 	}
 
+	baselineDigest, baselineCheckpointID, err := m.baselineSkillDigest(service, canonicalSkill)
+	if err != nil {
+		return cli.RuntimeSkillResult{}, err
+	}
+	if baselineDigest != "" && baselineDigest == skill.Digest {
+		log, err := m.stateStore.LoadReplayLog(service)
+		if err != nil {
+			return cli.RuntimeSkillResult{}, err
+		}
+		return cli.RuntimeSkillResult{
+			OK:             true,
+			Route:          route,
+			Runtime:        service,
+			Skill:          strings.TrimSpace(route.Subject),
+			CanonicalSkill: canonicalSkill,
+			Action:         route.Action,
+			Message:        fmt.Sprintf("skill %q is already present in baseline checkpoint %s for %s", canonicalSkill, baselineCheckpointID, service),
+			ReplayCount:    len(log.Events),
+		}, nil
+	}
+
 	previousDigest, err := m.effectiveSkillDigest(service, canonicalSkill)
 	if err != nil {
 		return cli.RuntimeSkillResult{}, err
@@ -270,8 +291,22 @@ func (m *Manager) installSkillFromGatewayState(ctx context.Context, service stri
 	if strings.TrimSpace(event.PackageDir) == "" {
 		return fmt.Errorf("replay event %s is missing package dir", event.EventID)
 	}
-	if _, err := os.Stat(event.PackageDir); err != nil {
+	info, err := os.Stat(event.PackageDir)
+	if err != nil {
 		return fmt.Errorf("replay event %s package dir unavailable: %w", event.EventID, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("replay event %s package dir %s is not a directory", event.EventID, event.PackageDir)
+	}
+	if strings.TrimSpace(event.PackageDigest) == "" {
+		return fmt.Errorf("replay event %s is missing package digest", event.EventID)
+	}
+	actualDigest, err := m.stateStore.DirectoryDigest(event.PackageDir)
+	if err != nil {
+		return fmt.Errorf("replay event %s digest verification failed: %w", event.EventID, err)
+	}
+	if actualDigest != strings.TrimSpace(event.PackageDigest) {
+		return fmt.Errorf("replay event %s package digest mismatch: got %s want %s", event.EventID, actualDigest, strings.TrimSpace(event.PackageDigest))
 	}
 
 	destination := strings.TrimSpace(event.ContainerPath)
@@ -379,6 +414,22 @@ func (m *Manager) effectiveSkillDigest(service, skill string) (string, error) {
 		state[name] = replaySkill.Digest
 	}
 	return state[skill], nil
+}
+
+func (m *Manager) baselineSkillDigest(service, skill string) (string, string, error) {
+	checkpoint, ok, err := m.stateStore.LoadCheckpoint(service)
+	if err != nil {
+		return "", "", err
+	}
+	if !ok {
+		return "", "", nil
+	}
+	for _, checkpointSkill := range checkpoint.Skills {
+		if strings.EqualFold(strings.TrimSpace(checkpointSkill.Name), strings.TrimSpace(skill)) {
+			return checkpointSkill.Digest, checkpoint.CheckpointID, nil
+		}
+	}
+	return "", checkpoint.CheckpointID, nil
 }
 
 func (m *Manager) resolveDeployableSkill(requested string) (deployableSkill, string, error) {

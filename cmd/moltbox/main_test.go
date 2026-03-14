@@ -414,6 +414,97 @@ func TestRetiredNamespacesFailExplicitly(t *testing.T) {
 	}
 }
 
+func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
+	testCases := []struct {
+		name        string
+		args        []string
+		wantPath    string
+		wantEnv     string
+		wantRuntime string
+	}{
+		{
+			name:        "dev skill deploy",
+			args:        []string{"dev", "skill", "deploy", "together"},
+			wantPath:    "/runtime/skill/deploy",
+			wantEnv:     "dev",
+			wantRuntime: "openclaw-dev",
+		},
+		{
+			name:        "test skill rollback",
+			args:        []string{"test", "skill", "rollback", "together"},
+			wantPath:    "/runtime/skill/rollback",
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+		},
+		{
+			name:        "prod checkpoint",
+			args:        []string{"prod", "checkpoint"},
+			wantPath:    "/runtime/checkpoint",
+			wantEnv:     "prod",
+			wantRuntime: "openclaw-prod",
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPost {
+					t.Fatalf("method = %s, want POST", request.Method)
+				}
+				if request.URL.Path != testCase.wantPath {
+					t.Fatalf("path = %s, want %s", request.URL.Path, testCase.wantPath)
+				}
+
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if payload.Route == nil {
+					t.Fatal("payload.route = nil")
+				}
+				if payload.Route.Environment != testCase.wantEnv || payload.Route.Runtime != testCase.wantRuntime {
+					t.Fatalf("payload.route = %#v, want env=%s runtime=%s", payload.Route, testCase.wantEnv, testCase.wantRuntime)
+				}
+
+				switch request.URL.Path {
+				case "/runtime/checkpoint":
+					_ = json.NewEncoder(writer).Encode(cli.RuntimeCheckpointResult{
+						OK:            true,
+						Route:         payload.Route,
+						Runtime:       testCase.wantRuntime,
+						CheckpointID:  "checkpoint-123",
+						Image:         "moltbox-runtime:" + testCase.wantRuntime + "-checkpoint-123",
+						SnapshotDir:   "/srv/moltbox-state/runtime-baselines/" + testCase.wantRuntime + "/checkpoint-123/snapshot",
+						ReplayCleared: true,
+					})
+				default:
+					_ = json.NewEncoder(writer).Encode(cli.RuntimeSkillResult{
+						OK:             true,
+						Route:          payload.Route,
+						Runtime:        testCase.wantRuntime,
+						Skill:          "together",
+						CanonicalSkill: "together-escalation",
+						Action:         payload.Route.Action,
+						Message:        "ok",
+					})
+				}
+			}))
+			defer server.Close()
+
+			t.Setenv("MOLTBOX_GATEWAY_URL", server.URL)
+
+			var output strings.Builder
+			if code := run(testCase.args, &output, ioDiscard{}); code != cli.ExitOK {
+				t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)
+			}
+			if output.Len() == 0 {
+				t.Fatal("expected gateway response output")
+			}
+		})
+	}
+}
+
 func TestUnknownResourceFails(t *testing.T) {
 	t.Parallel()
 

@@ -183,6 +183,7 @@ type RuntimeSkillResult struct {
 	Skill          string `json:"skill"`
 	CanonicalSkill string `json:"canonical_skill"`
 	Action         string `json:"action"`
+	Message        string `json:"message,omitempty"`
 	DeploymentID   string `json:"deployment_id,omitempty"`
 	EventID        string `json:"event_id,omitempty"`
 	PackageDir     string `json:"package_dir,omitempty"`

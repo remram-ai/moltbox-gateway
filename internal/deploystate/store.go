@@ -9,8 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 type Store struct {
@@ -70,24 +72,31 @@ func New(stateRoot string) *Store {
 }
 
 func (s *Store) AppendDeployment(record DeploymentRecord) error {
-	if err := os.MkdirAll(filepath.Dir(s.deploymentHistoryPath()), 0o755); err != nil {
+	path := s.deploymentHistoryPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create deployment history dir: %w", err)
 	}
-
-	file, err := os.OpenFile(s.deploymentHistoryPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return fmt.Errorf("open deployment history: %w", err)
-	}
-	defer file.Close()
 
 	payload, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("marshal deployment record: %w", err)
 	}
-	if _, err := file.Write(append(payload, '\n')); err != nil {
-		return fmt.Errorf("append deployment record: %w", err)
-	}
-	return nil
+
+	return withFileLock(path, func() error {
+		existing, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read deployment history: %w", err)
+		}
+		if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+			existing = append(existing, '\n')
+		}
+		existing = append(existing, payload...)
+		existing = append(existing, '\n')
+		if err := writeFileAtomically(path, existing, 0o644); err != nil {
+			return fmt.Errorf("write deployment history: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) LoadReplayLog(runtime string) (ReplayLog, error) {
@@ -117,12 +126,13 @@ func (s *Store) LoadReplayLog(runtime string) (ReplayLog, error) {
 }
 
 func (s *Store) SaveReplayLog(runtime string, log ReplayLog) error {
+	path := s.replayLogPath(runtime)
 	log.Runtime = runtime
 	if log.Events == nil {
 		log.Events = []ReplayEvent{}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(s.replayLogPath(runtime)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create replay dir for %s: %w", runtime, err)
 	}
 
@@ -130,7 +140,12 @@ func (s *Store) SaveReplayLog(runtime string, log ReplayLog) error {
 	if err != nil {
 		return fmt.Errorf("marshal replay log for %s: %w", runtime, err)
 	}
-	return os.WriteFile(s.replayLogPath(runtime), append(payload, '\n'), 0o644)
+	return withFileLock(path, func() error {
+		if err := writeFileAtomically(path, append(payload, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write replay log for %s: %w", runtime, err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) ClearReplayLog(runtime, checkpointID string) error {
@@ -189,8 +204,9 @@ func (s *Store) LoadCheckpoint(runtime string) (CheckpointMetadata, bool, error)
 }
 
 func (s *Store) SaveCheckpoint(runtime string, metadata CheckpointMetadata) error {
+	path := s.checkpointMetadataPath(runtime)
 	metadata.Runtime = runtime
-	if err := os.MkdirAll(filepath.Dir(s.checkpointMetadataPath(runtime)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create checkpoint dir for %s: %w", runtime, err)
 	}
 
@@ -198,7 +214,12 @@ func (s *Store) SaveCheckpoint(runtime string, metadata CheckpointMetadata) erro
 	if err != nil {
 		return fmt.Errorf("marshal checkpoint metadata for %s: %w", runtime, err)
 	}
-	return os.WriteFile(s.checkpointMetadataPath(runtime), append(payload, '\n'), 0o644)
+	return withFileLock(path, func() error {
+		if err := writeFileAtomically(path, append(payload, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write checkpoint metadata for %s: %w", runtime, err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) DeleteCheckpoint(runtime string) error {
@@ -368,4 +389,70 @@ func copyTree(source, destination string) error {
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
+}
+
+func withFileLock(path string, fn func() error) error {
+	lockPath := path + ".lock"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = file.Close()
+			defer os.Remove(lockPath)
+			return fn()
+		}
+		if !os.IsExist(err) {
+			return fmt.Errorf("create lock for %s: %w", path, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout acquiring lock for %s", path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func writeFileAtomically(path string, data []byte, perm os.FileMode) (err error) {
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for %s: %w", path, err)
+	}
+	tmpPath := file.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err = file.Chmod(perm); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("chmod temp file for %s: %w", path, err)
+	}
+	if _, err = file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write temp file for %s: %w", path, err)
+	}
+	if err = file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync temp file for %s: %w", path, err)
+	}
+	if err = file.Close(); err != nil {
+		return fmt.Errorf("close temp file for %s: %w", path, err)
+	}
+	if err = replaceFile(tmpPath, path); err != nil {
+		return fmt.Errorf("replace %s: %w", path, err)
+	}
+	return nil
+}
+
+func replaceFile(source, destination string) error {
+	if err := os.Rename(source, destination); err == nil {
+		return nil
+	} else if runtime.GOOS != "windows" {
+		return err
+	}
+
+	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(source, destination)
 }
