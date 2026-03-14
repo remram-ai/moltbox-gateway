@@ -20,6 +20,7 @@ import (
 
 	"github.com/remram-ai/moltbox-gateway/internal/command"
 	"github.com/remram-ai/moltbox-gateway/internal/config"
+	"github.com/remram-ai/moltbox-gateway/internal/deploystate"
 	"github.com/remram-ai/moltbox-gateway/internal/docker"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
@@ -39,6 +40,7 @@ type Manager struct {
 	inspector      ContainerInspector
 	runner         command.Runner
 	secretResolver SecretResolver
+	stateStore     *deploystate.Store
 }
 
 type ServiceDefinition struct {
@@ -55,6 +57,7 @@ func NewManager(cfg config.Config, inspector ContainerInspector, runner command.
 		inspector:      inspector,
 		runner:         runner,
 		secretResolver: secretResolver,
+		stateStore:     deploystate.New(cfg.Paths.StateRoot),
 	}
 }
 
@@ -63,6 +66,12 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 	definition, err := m.LoadServiceDefinition(canonicalService)
 	if err != nil {
 		return cli.ServiceDeployResult{}, err
+	}
+
+	if isRuntimeService(canonicalService) {
+		if err := m.prepareRuntimeDeploy(ctx, route, canonicalService); err != nil {
+			return cli.ServiceDeployResult{}, err
+		}
 	}
 
 	outputDir, commandArgs, err := m.RenderServiceAssets(canonicalService, definition)
@@ -94,6 +103,16 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 
 	containers, err := m.waitForContainers(ctx, definition.ContainerNames, 2*time.Minute)
 	if err != nil {
+		return cli.ServiceDeployResult{}, err
+	}
+
+	if isRuntimeService(canonicalService) {
+		if err := m.replayRuntimeDeployHistory(ctx, route, canonicalService); err != nil {
+			return cli.ServiceDeployResult{}, err
+		}
+	}
+
+	if err := m.recordServiceDeployment(route, canonicalService, "success"); err != nil {
 		return cli.ServiceDeployResult{}, err
 	}
 
@@ -522,7 +541,7 @@ func (m *Manager) renderConfigAssets(service, outputDir string) error {
 		if err := m.renderRuntimeTree(service, filepath.Join(m.config.RuntimeRepoRoot(), service), filepath.Join(outputDir, "config", service)); err != nil {
 			return err
 		}
-		return m.stageRuntimeSkills(service)
+		return nil
 	default:
 		return nil
 	}
@@ -566,10 +585,6 @@ func (m *Manager) renderCompose(service string, definition ServiceDefinition, se
 }
 
 func (m *Manager) renderComposeEnvFile(service, outputDir string) error {
-	if m.secretResolver == nil {
-		return nil
-	}
-
 	composePath := filepath.Join(outputDir, "compose.yml")
 	data, err := os.ReadFile(composePath)
 	if err != nil {
@@ -592,12 +607,18 @@ func (m *Manager) renderComposeEnvFile(service, outputDir string) error {
 	}
 	sort.Strings(secretNames)
 
-	resolved, err := m.secretResolver.Resolve(secretScopeForService(service), secretNames)
-	if err != nil {
-		return fmt.Errorf("resolve compose secrets for %s: %w", service, err)
+	resolved := map[string]string{}
+	if m.secretResolver != nil {
+		resolved, err = m.secretResolver.Resolve(secretScopeForService(service), secretNames)
+		if err != nil {
+			return fmt.Errorf("resolve compose secrets for %s: %w", service, err)
+		}
 	}
 
 	lines := make([]string, 0, len(secretNames))
+	if image := m.selectedRuntimeImage(service); image != "" {
+		lines = append(lines, "OPENCLAW_IMAGE="+strconv.Quote(image))
+	}
 	for _, name := range secretNames {
 		value, ok := resolved[name]
 		if !ok {
@@ -610,50 +631,6 @@ func (m *Manager) renderComposeEnvFile(service, outputDir string) error {
 		content += "\n"
 	}
 	return os.WriteFile(filepath.Join(outputDir, ".env"), []byte(content), 0o600)
-}
-
-func (m *Manager) stageRuntimeSkills(service string) error {
-	skillsRoot := filepath.Join(m.config.SkillsRepoRoot(), "skills")
-	if strings.TrimSpace(m.config.SkillsRepoRoot()) == "" {
-		return nil
-	}
-
-	entries, err := os.ReadDir(skillsRoot)
-	if err != nil {
-		if errorsIsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read skills repo: %w", err)
-	}
-
-	destinationRoot := filepath.Join(m.config.RuntimeComponentDir(service), "skills")
-	if err := os.MkdirAll(destinationRoot, 0o755); err != nil {
-		return fmt.Errorf("create runtime skills dir for %s: %w", service, err)
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		sourceDir := filepath.Join(skillsRoot, entry.Name())
-		skillFile := filepath.Join(sourceDir, "SKILL.md")
-		if info, err := os.Stat(skillFile); err != nil || info.IsDir() {
-			if err == nil {
-				continue
-			}
-			if errorsIsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("stat skill %s: %w", entry.Name(), err)
-		}
-
-		if err := copyTree(sourceDir, filepath.Join(destinationRoot, entry.Name())); err != nil {
-			return fmt.Errorf("stage skill %s for %s: %w", entry.Name(), service, err)
-		}
-	}
-
-	return nil
 }
 
 func (m *Manager) renderContext(service string) map[string]string {

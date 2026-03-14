@@ -549,7 +549,20 @@ func (s *Server) handleRuntimeCheckpoint(writer http.ResponseWriter, request *ht
 		return
 	}
 
-	s.writeJSON(writer, http.StatusNotImplemented, runtime.Payload(payload.Route))
+	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Minute)
+	defer cancel()
+
+	result, err := s.orchestrator.RuntimeCheckpoint(ctx, payload.Route)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"runtime_checkpoint_failed",
+			fmt.Sprintf("failed to checkpoint runtime '%s'", payload.Route.Runtime),
+			err.Error(),
+		))
+		return
+	}
+	s.writeJSON(writer, http.StatusOK, result)
 }
 
 func (s *Server) handleRuntimeOpenClaw(writer http.ResponseWriter, request *http.Request) {

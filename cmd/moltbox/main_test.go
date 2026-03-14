@@ -183,18 +183,22 @@ func TestCLIForwardsToGateway(t *testing.T) {
 			args:       []string{"dev", "checkpoint"},
 			wantMethod: http.MethodPost,
 			wantPath:   "/runtime/checkpoint",
-			wantCode:   cli.ExitNotImplemented,
+			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
 				var payload cli.RouteRequest
 				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 					t.Fatalf("decode request: %v", err)
 				}
-				_ = json.NewEncoder(writer).Encode(cli.NotImplemented(
-					payload.Route,
-					"dev checkpoint is not implemented yet",
-					"checkpoint orchestration lands after runtime deployment",
-				))
+				_ = json.NewEncoder(writer).Encode(cli.RuntimeCheckpointResult{
+					OK:            true,
+					Route:         payload.Route,
+					Runtime:       "openclaw-dev",
+					CheckpointID:  "checkpoint-123",
+					Image:         "moltbox-runtime:openclaw-dev-checkpoint-123",
+					SnapshotDir:   "/srv/moltbox-state/runtime-baselines/openclaw-dev/checkpoint-123/snapshot",
+					ReplayCleared: true,
+				})
 			},
 		},
 		{

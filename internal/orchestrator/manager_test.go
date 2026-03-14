@@ -170,10 +170,6 @@ func TestRenderServiceAssetsWritesScopedSecretEnvFile(t *testing.T) {
 	if !strings.Contains(string(envData), `TOGETHER_API_KEY="scoped-dev-secret"`) {
 		t.Fatalf("rendered .env missing scoped secret: %s", envData)
 	}
-
-	if _, err := os.Stat(filepath.Join(root, "runtime-state", "openclaw-dev", "skills", "together-escalation", "SKILL.md")); err != nil {
-		t.Fatalf("staged skill missing from runtime state: %v", err)
-	}
 }
 
 func TestRenderServiceAssetsSupportsEnvironmentAlias(t *testing.T) {

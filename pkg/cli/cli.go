@@ -165,6 +165,16 @@ type ServiceActionResult struct {
 	Containers []ServiceContainerStatus `json:"containers,omitempty"`
 }
 
+type RuntimeCheckpointResult struct {
+	OK            bool   `json:"ok"`
+	Route         *Route `json:"route"`
+	Runtime       string `json:"runtime"`
+	CheckpointID  string `json:"checkpoint_id"`
+	Image         string `json:"image"`
+	SnapshotDir   string `json:"snapshot_dir"`
+	ReplayCleared bool   `json:"replay_cleared"`
+}
+
 type CommandResult struct {
 	OK            bool     `json:"ok"`
 	Route         *Route   `json:"route"`
