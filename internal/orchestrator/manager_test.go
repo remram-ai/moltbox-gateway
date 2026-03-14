@@ -13,6 +13,7 @@ import (
 
 	"github.com/remram-ai/moltbox-gateway/internal/command"
 	appconfig "github.com/remram-ai/moltbox-gateway/internal/config"
+	"github.com/remram-ai/moltbox-gateway/internal/deploystate"
 	"github.com/remram-ai/moltbox-gateway/internal/docker"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
@@ -462,10 +463,13 @@ func TestGatewayUpdateStartsHelperContainer(t *testing.T) {
 	servicesRoot := filepath.Join(root, "services-repo")
 	runtimeRoot := filepath.Join(root, "runtime-repo")
 	stateRoot := filepath.Join(root, "state")
+	repoRoot := filepath.Join(root, "gateway-repo")
 
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "gateway", "service.yaml"), "compose_project: gateway\ncontainer_names:\n  - gateway\nruntime_required: true\nskip_pull: true\n")
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "gateway", "compose.yml.template"), "services:\n  gateway:\n    container_name: \"{{ container_name }}\"\n")
 	mustWriteFile(t, filepath.Join(runtimeRoot, "gateway", "config.yaml"), "gateway:\n  host: 0.0.0.0\n  port: 7460\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "cmd", "gateway", "main.go"), "package main\nfunc main() {}\n")
+	mustWriteFile(t, filepath.Join(stateRoot, "updates", "gateway", "gateway"), "gateway-binary\n")
 
 	runner := &fakeRunner{
 		results: []command.Result{
@@ -482,7 +486,7 @@ func TestGatewayUpdateStartsHelperContainer(t *testing.T) {
 			LogsRoot:    filepath.Join(root, "logs"),
 		},
 		Repos: appconfig.ReposConfig{
-			Gateway:  appconfig.RepoConfig{URL: filepath.Join(root, "gateway-repo")},
+			Gateway:  appconfig.RepoConfig{URL: repoRoot},
 			Services: appconfig.RepoConfig{URL: servicesRoot},
 			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
 		},
@@ -504,8 +508,17 @@ func TestGatewayUpdateStartsHelperContainer(t *testing.T) {
 		t.Fatalf("expected network inspect/create + helper run, got %d commands", len(runner.commands))
 	}
 	got := strings.Join(runner.commands[2], " ")
-	if !strings.Contains(got, "run -d --rm") || !strings.Contains(got, "moltbox-gateway:latest") || !strings.Contains(got, "golang:1.23-bookworm") || !strings.Contains(got, "/usr/local/go/bin/go build -buildvcs=false -o /out/moltbox") || !strings.Contains(got, "remote get-url origin") || !strings.Contains(got, "cp \"$STAGING_ROOT/moltbox\" \"$CLI_PATH\"") || !strings.Contains(got, "cp \"$STAGING_ROOT/moltbox\" \"$SHARED_CLI_PATH\"") || !strings.Contains(got, "cp \"$CONFIG_SOURCE\" \"$SYSTEM_CONFIG_PATH\"") || !strings.Contains(got, "chown -R \"$CLI_OWNER\" \"$SECRETS_ROOT\"") || !strings.Contains(got, "moltbox-cli-wrapper.sh") || !strings.Contains(got, "CLI_WRAPPER_PATH") || !strings.Contains(got, "moltbox-bootstrap-wrapper.sh") || !strings.Contains(got, "BOOTSTRAP_WRAPPER_PATH") || !strings.Contains(got, "/usr/local/bin:/usr/local/bin") || !strings.Contains(got, "/etc/moltbox:/etc/moltbox") {
+	if !strings.Contains(got, "run -d --rm") || !strings.Contains(got, "moltbox-gateway:latest") || !strings.Contains(got, "golang:1.23-bookworm") || !strings.Contains(got, "/usr/local/go/bin/go build -buildvcs=false -o /out/moltbox") || !strings.Contains(got, "remote get-url origin") || !strings.Contains(got, "cp \"$STAGING_ROOT/moltbox\" \"$CLI_PATH\"") || !strings.Contains(got, "cp \"$STAGING_ROOT/moltbox\" \"$SHARED_CLI_PATH\"") || !strings.Contains(got, "cp \"$CONFIG_SOURCE\" \"$SYSTEM_CONFIG_PATH\"") || !strings.Contains(got, "chown -R \"$CLI_OWNER\" \"$SECRETS_ROOT\"") || !strings.Contains(got, "moltbox-cli-wrapper.sh") || !strings.Contains(got, "CLI_WRAPPER_PATH") || !strings.Contains(got, "moltbox-bootstrap-wrapper.sh") || !strings.Contains(got, "BOOTSTRAP_WRAPPER_PATH") || !strings.Contains(got, "/usr/local/bin:/usr/local/bin") || !strings.Contains(got, "/etc/moltbox:/etc/moltbox") || !strings.Contains(got, "/var/lib/moltbox:/var/lib/moltbox") || !strings.Contains(got, `HISTORY_PATH='/var/lib/moltbox/history.jsonl'`) || !strings.Contains(got, `sha256sum "$STAGING_ROOT/gateway"`) {
 		t.Fatalf("gateway update helper command = %q", got)
+	}
+
+	store := deploystate.New(stateRoot)
+	history, err := store.ReadDeploymentHistory()
+	if err != nil {
+		t.Fatalf("ReadDeploymentHistory() error = %v", err)
+	}
+	if len(history) != 1 || history[0].Target != "gateway" || history[0].Operation != "gateway_update" {
+		t.Fatalf("deployment history = %#v, want one gateway_update record", history)
 	}
 }
 

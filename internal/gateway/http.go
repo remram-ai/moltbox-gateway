@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/remram-ai/moltbox-gateway/internal/runtime"
-	"github.com/remram-ai/moltbox-gateway/internal/services"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
 
@@ -28,8 +26,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/update", s.handleGatewayUpdate)
 	mux.HandleFunc("/runtime/reload", s.handleRuntimeReload)
 	mux.HandleFunc("/runtime/checkpoint", s.handleRuntimeCheckpoint)
+	mux.HandleFunc("/runtime/skill/list", s.handleRuntimeSkillList)
 	mux.HandleFunc("/runtime/skill/deploy", s.handleRuntimeSkillDeploy)
+	mux.HandleFunc("/runtime/skill/remove", s.handleRuntimeSkillRemove)
 	mux.HandleFunc("/runtime/skill/rollback", s.handleRuntimeSkillRollback)
+	mux.HandleFunc("/runtime/plugin/list", s.handleRuntimePluginList)
+	mux.HandleFunc("/runtime/plugin/install", s.handleRuntimePluginInstall)
+	mux.HandleFunc("/runtime/plugin/remove", s.handleRuntimePluginRemove)
 	mux.HandleFunc("/runtime/openclaw", s.handleRuntimeOpenClaw)
 	mux.HandleFunc("/token/create", s.handleTokenCreate)
 	mux.HandleFunc("/token/list", s.handleTokenList)
@@ -598,6 +601,77 @@ func (s *Server) handleRuntimeSkillDeploy(writer http.ResponseWriter, request *h
 	s.writeJSON(writer, http.StatusOK, result)
 }
 
+func (s *Server) handleRuntimeSkillList(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/skill/list"))
+		return
+	}
+
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime skill route")
+	if !ok {
+		return
+	}
+	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimeSkill || payload.Route.Action != "list" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime skill list route", "use: dev|test|prod skill list"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
+	defer cancel()
+
+	result, err := s.orchestrator.RuntimeSkillList(ctx, payload.Route)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"runtime_skill_list_failed",
+			fmt.Sprintf("failed to list skills in runtime '%s'", payload.Route.Runtime),
+			err.Error(),
+		))
+		return
+	}
+	if !result.OK {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"runtime_skill_list_failed",
+			fmt.Sprintf("failed to list skills in runtime '%s'", payload.Route.Runtime),
+			result.Stdout,
+		))
+		return
+	}
+	s.writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleRuntimeSkillRemove(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/skill/remove"))
+		return
+	}
+
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime skill route")
+	if !ok {
+		return
+	}
+	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimeSkill || payload.Route.Action != "remove" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime skill remove route", "use: dev|test|prod skill remove <skill>"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
+	defer cancel()
+
+	result, err := s.orchestrator.RuntimeSkillRemove(ctx, payload.Route)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"runtime_skill_remove_failed",
+			fmt.Sprintf("failed to remove skill '%s' from runtime '%s'", payload.Route.Subject, payload.Route.Runtime),
+			err.Error(),
+		))
+		return
+	}
+	s.writeJSON(writer, http.StatusOK, result)
+}
+
 func (s *Server) handleRuntimeSkillRollback(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/skill/rollback"))
@@ -608,20 +682,120 @@ func (s *Server) handleRuntimeSkillRollback(writer http.ResponseWriter, request 
 	if !ok {
 		return
 	}
-	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimeSkill || payload.Route.Action != "rollback" {
-		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime skill rollback route", "use: dev|test|prod skill rollback <skill>"))
+	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimeSkill {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime skill remove route", "use: dev|test|prod skill remove <skill>"))
+		return
+	}
+	if payload.Route.Action == "rollback" {
+		payload.Route.Action = "remove"
+	}
+	if payload.Route.Action != "remove" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime skill remove route", "use: dev|test|prod skill remove <skill>"))
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
 	defer cancel()
 
-	result, err := s.orchestrator.RuntimeSkillRollback(ctx, payload.Route)
+	result, err := s.orchestrator.RuntimeSkillRemove(ctx, payload.Route)
 	if err != nil {
 		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
 			payload.Route,
-			"runtime_skill_rollback_failed",
-			fmt.Sprintf("failed to rollback skill '%s' in runtime '%s'", payload.Route.Subject, payload.Route.Runtime),
+			"runtime_skill_remove_failed",
+			fmt.Sprintf("failed to remove skill '%s' from runtime '%s'", payload.Route.Subject, payload.Route.Runtime),
+			err.Error(),
+		))
+		return
+	}
+	s.writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleRuntimePluginInstall(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/plugin/install"))
+		return
+	}
+
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+	if !ok {
+		return
+	}
+	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimePlugin || payload.Route.Action != "install" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin install route", "use: dev|test|prod plugin install <package>"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Minute)
+	defer cancel()
+
+	result, err := s.orchestrator.RuntimePluginInstall(ctx, payload.Route)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"runtime_plugin_install_failed",
+			fmt.Sprintf("failed to install plugin '%s' into runtime '%s'", payload.Route.Subject, payload.Route.Runtime),
+			err.Error(),
+		))
+		return
+	}
+	s.writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleRuntimePluginList(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/plugin/list"))
+		return
+	}
+
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+	if !ok {
+		return
+	}
+	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimePlugin || payload.Route.Action != "list" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin list route", "use: dev|test|prod plugin list"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
+	defer cancel()
+
+	result, err := s.orchestrator.RuntimePluginList(ctx, payload.Route)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"runtime_plugin_list_failed",
+			fmt.Sprintf("failed to list plugins in runtime '%s'", payload.Route.Runtime),
+			err.Error(),
+		))
+		return
+	}
+	s.writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleRuntimePluginRemove(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/plugin/remove"))
+		return
+	}
+
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+	if !ok {
+		return
+	}
+	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimePlugin || payload.Route.Action != "remove" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin remove route", "use: dev|test|prod plugin remove <plugin>"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
+	defer cancel()
+
+	result, err := s.orchestrator.RuntimePluginRemove(ctx, payload.Route)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"runtime_plugin_remove_failed",
+			fmt.Sprintf("failed to remove plugin '%s' from runtime '%s'", payload.Route.Subject, payload.Route.Runtime),
 			err.Error(),
 		))
 		return
@@ -684,29 +858,13 @@ func (s *Server) handleExecute(writer http.ResponseWriter, request *http.Request
 		s.writeJSON(writer, http.StatusBadRequest, cli.Error(nil, "parse_error", "missing route in execute request", "send JSON with the parsed route"))
 		return
 	}
-
-	var response any
-	switch payload.Route.Resource {
-	case "gateway":
-		response = Payload(payload.Route)
-	case "dev", "test", "prod", "service":
-		if payload.Route.Kind == cli.KindScopedSecrets {
-			s.logScopedSecretsRequest(request, payload.Route)
-			response = s.secretHandler.Execute(payload.Route, payload.SecretValue)
-			break
-		}
-		if payload.Route.Resource == "service" {
-			response = cli.Error(payload.Route, "parse_error", "unsupported route", "use a documented command")
-			break
-		}
-		response = runtime.Payload(payload.Route)
-	case "ollama", "opensearch", "caddy":
-		response = services.Payload(payload.Route)
-	default:
-		response = cli.Error(payload.Route, "parse_error", "unsupported route", "use a documented command")
+	if payload.Route.Kind != cli.KindScopedSecrets {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "direct execute only supports scoped secrets", "use the documented gateway, environment, or passthrough route"))
+		return
 	}
 
-	s.writeJSON(writer, http.StatusOK, response)
+	s.logScopedSecretsRequest(request, payload.Route)
+	s.writeJSON(writer, http.StatusOK, s.secretHandler.Execute(payload.Route, payload.SecretValue))
 }
 
 func (s *Server) logScopedSecretsRequest(request *http.Request, route *cli.Route) {

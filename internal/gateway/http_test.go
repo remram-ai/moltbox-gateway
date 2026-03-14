@@ -127,6 +127,28 @@ func TestHandleExecuteScopedSecretsUsesGatewayHandlerAndLogs(t *testing.T) {
 	}
 }
 
+func TestHandleExecuteRejectsNonSecretRoutes(t *testing.T) {
+	server, _ := newTestServer(t, nil)
+
+	body := strings.NewReader(`{"route":{"resource":"dev","kind":"runtime_action","action":"reload","environment":"dev","runtime":"openclaw-dev"}}`)
+	request := httptest.NewRequest(http.MethodPost, "/execute", body)
+	recorder := httptest.NewRecorder()
+
+	server.handleExecute(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+
+	var response cli.Envelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.ErrorType != "parse_error" {
+		t.Fatalf("response = %#v, want parse_error", response)
+	}
+}
+
 func newTestServer(t *testing.T, limiter *mcpAuthLimiter) (*Server, *bytes.Buffer) {
 	t.Helper()
 

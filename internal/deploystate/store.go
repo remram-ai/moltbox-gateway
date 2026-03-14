@@ -39,6 +39,12 @@ type ReplayEvent struct {
 	Runtime       string            `json:"runtime"`
 	Type          string            `json:"type"`
 	Skill         string            `json:"skill,omitempty"`
+	Plugin        string            `json:"plugin,omitempty"`
+	Package       string            `json:"package,omitempty"`
+	Version       string            `json:"version,omitempty"`
+	Digest        string            `json:"digest,omitempty"`
+	Source        string            `json:"source,omitempty"`
+	SourcePath    string            `json:"source_path,omitempty"`
 	PackageDir    string            `json:"package_dir,omitempty"`
 	PackageDigest string            `json:"package_digest,omitempty"`
 	ContainerPath string            `json:"container_path,omitempty"`
@@ -56,6 +62,14 @@ type CheckpointSkill struct {
 	Digest string `json:"digest"`
 }
 
+type CheckpointPlugin struct {
+	Name    string `json:"name"`
+	Package string `json:"package,omitempty"`
+	Version string `json:"version,omitempty"`
+	Digest  string `json:"digest"`
+	Source  string `json:"source,omitempty"`
+}
+
 type CheckpointMetadata struct {
 	Runtime      string            `json:"runtime"`
 	CheckpointID string            `json:"checkpoint_id"`
@@ -65,6 +79,7 @@ type CheckpointMetadata struct {
 	SnapshotDir  string            `json:"snapshot_dir"`
 	DeploymentID string            `json:"deployment_id"`
 	Skills       []CheckpointSkill `json:"skills,omitempty"`
+	Plugins      []CheckpointPlugin `json:"plugins,omitempty"`
 }
 
 func New(stateRoot string) *Store {
@@ -183,6 +198,18 @@ func (s *Store) StageReplayPackage(runtime, eventID, sourceDir string) (string, 
 	return destination, nil
 }
 
+func (s *Store) StageReplaySource(runtime, eventID, sourcePath string) (string, error) {
+	destinationRoot := s.replaySourceDir(runtime, eventID)
+	if err := os.RemoveAll(destinationRoot); err != nil {
+		return "", fmt.Errorf("reset staged source dir %s: %w", destinationRoot, err)
+	}
+	destination := filepath.Join(destinationRoot, filepath.Base(sourcePath))
+	if err := copyPath(sourcePath, destination); err != nil {
+		return "", fmt.Errorf("stage replay source %s: %w", sourcePath, err)
+	}
+	return destination, nil
+}
+
 func (s *Store) LoadCheckpoint(runtime string) (CheckpointMetadata, bool, error) {
 	path := s.checkpointMetadataPath(runtime)
 	data, err := os.ReadFile(path)
@@ -263,6 +290,31 @@ func (s *Store) ReplaySkillState(runtime string) (map[string]CheckpointSkill, er
 	return state, nil
 }
 
+func (s *Store) ReplayPluginState(runtime string) (map[string]CheckpointPlugin, error) {
+	log, err := s.LoadReplayLog(runtime)
+	if err != nil {
+		return nil, err
+	}
+	state := make(map[string]CheckpointPlugin, len(log.Events))
+	for _, event := range log.Events {
+		if event.Type != "plugin_install" || strings.TrimSpace(event.Plugin) == "" {
+			continue
+		}
+		digest := strings.TrimSpace(event.Digest)
+		if digest == "" {
+			digest = strings.TrimSpace(event.PackageDigest)
+		}
+		state[event.Plugin] = CheckpointPlugin{
+			Name:    event.Plugin,
+			Package: event.Package,
+			Version: event.Version,
+			Digest:  digest,
+			Source:  event.Source,
+		}
+	}
+	return state, nil
+}
+
 func (s *Store) ReadDeploymentHistory() ([]DeploymentRecord, error) {
 	file, err := os.Open(s.deploymentHistoryPath())
 	if err != nil {
@@ -302,6 +354,10 @@ func (s *Store) replayLogPath(runtime string) string {
 
 func (s *Store) replayPackageDir(runtime, eventID string) string {
 	return filepath.Join(s.stateRoot, "deploy", "runtime", runtime, "packages", eventID)
+}
+
+func (s *Store) replaySourceDir(runtime, eventID string) string {
+	return filepath.Join(s.stateRoot, "deploy", "runtime", runtime, "sources", eventID)
 }
 
 func (s *Store) checkpointMetadataPath(runtime string) string {
@@ -389,6 +445,25 @@ func copyTree(source, destination string) error {
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
+}
+
+func copyPath(source, destination string) error {
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return copyTree(source, destination)
+	}
+
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(destination, data, 0o644)
 }
 
 func withFileLock(path string, fn func() error) error {

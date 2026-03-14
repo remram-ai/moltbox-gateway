@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -38,6 +40,8 @@ func (r *simulatedRuntimeRunner) Run(_ context.Context, dir string, name string,
 		return command.Result{ExitCode: 0}, nil
 	case "build":
 		return command.Result{ExitCode: 0}, nil
+	case "restart":
+		return command.Result{ExitCode: 0}, nil
 	case "exec":
 		return r.handleExec(args)
 	case "cp":
@@ -59,6 +63,9 @@ func (r *simulatedRuntimeRunner) handleExec(args []string) (command.Result, erro
 	runtimeRoot := r.runtimeRoots[service]
 	if runtimeRoot == "" {
 		return command.Result{ExitCode: 1, Stdout: "unknown runtime"}, nil
+	}
+	if serviceIndex+1 < len(args) && args[serviceIndex+1] == "openclaw" {
+		return r.handleOpenClaw(runtimeRoot, args[serviceIndex+2:])
 	}
 
 	commandText := args[len(args)-1]
@@ -86,6 +93,209 @@ func (r *simulatedRuntimeRunner) handleExec(args []string) (command.Result, erro
 		}
 	}
 	return command.Result{ExitCode: 0}, nil
+}
+
+func (r *simulatedRuntimeRunner) handleOpenClaw(runtimeRoot string, args []string) (command.Result, error) {
+	if len(args) == 0 {
+		return command.Result{ExitCode: 1, Stdout: "missing openclaw command"}, nil
+	}
+	switch args[0] {
+	case "skills":
+		if len(args) >= 2 && args[1] == "list" {
+			skillsRoot := filepath.Join(runtimeRoot, "skills")
+			entries, err := os.ReadDir(skillsRoot)
+			if err != nil && !os.IsNotExist(err) {
+				return command.Result{}, err
+			}
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				if entry.IsDir() {
+					names = append(names, entry.Name())
+				}
+			}
+			sort.Strings(names)
+			if len(names) == 0 {
+				return command.Result{ExitCode: 0}, nil
+			}
+			return command.Result{ExitCode: 0, Stdout: strings.Join(names, "\n") + "\n"}, nil
+		}
+	case "plugins":
+		return r.handlePlugins(runtimeRoot, args[1:])
+	}
+	return command.Result{ExitCode: 0}, nil
+}
+
+func (r *simulatedRuntimeRunner) handlePlugins(runtimeRoot string, args []string) (command.Result, error) {
+	if len(args) == 0 {
+		return command.Result{ExitCode: 1, Stdout: "missing plugins command"}, nil
+	}
+	switch args[0] {
+	case "install":
+		if len(args) < 2 {
+			return command.Result{ExitCode: 1, Stdout: "missing plugin spec"}, nil
+		}
+		return r.installPlugin(runtimeRoot, args[1])
+	case "info":
+		if len(args) < 2 {
+			return command.Result{ExitCode: 1, Stdout: "missing plugin name"}, nil
+		}
+		pluginRoot := filepath.Join(runtimeRoot, "extensions", canonicalRuntimePluginName(args[1]))
+		if _, err := os.Stat(pluginRoot); err != nil {
+			if os.IsNotExist(err) {
+				return command.Result{ExitCode: 1, Stdout: "not installed"}, nil
+			}
+			return command.Result{}, err
+		}
+		return command.Result{ExitCode: 0, Stdout: args[1] + "\n"}, nil
+	case "list":
+		return r.listPlugins(runtimeRoot, args[1:])
+	default:
+		return command.Result{ExitCode: 1, Stdout: "unsupported plugins command"}, nil
+	}
+}
+
+func (r *simulatedRuntimeRunner) installPlugin(runtimeRoot, spec string) (command.Result, error) {
+	extensionsRoot := filepath.Join(runtimeRoot, "extensions")
+	if err := os.MkdirAll(extensionsRoot, 0o755); err != nil {
+		return command.Result{}, err
+	}
+
+	sourcePath := runtimePluginHostPath(runtimeRoot, spec)
+	pluginID := canonicalRuntimePluginName(npmPackageNameFromSpec(spec))
+	packageName := strings.TrimSpace(npmPackageNameFromSpec(spec))
+	version := "1.2.0"
+	if sourcePath != "" {
+		if id := readRuntimePluginManifestID(sourcePath); id != "" {
+			pluginID = canonicalRuntimePluginName(id)
+		}
+		if name, sourceVersion := readRuntimePluginPackageInfo(sourcePath); name != "" {
+			packageName = name
+			if sourceVersion != "" {
+				version = sourceVersion
+			}
+		}
+	}
+	if pluginID == "" {
+		pluginID = canonicalRuntimePluginName(strings.TrimSuffix(filepath.Base(spec), filepath.Ext(spec)))
+	}
+	if packageName == "" {
+		packageName = pluginID
+	}
+	if parsedVersion := runtimePackageVersionFromSpec(spec); parsedVersion != "" {
+		version = parsedVersion
+	}
+
+	pluginRoot := filepath.Join(extensionsRoot, pluginID)
+	if err := os.RemoveAll(pluginRoot); err != nil {
+		return command.Result{}, err
+	}
+	if sourcePath != "" {
+		info, err := os.Stat(sourcePath)
+		if err != nil {
+			return command.Result{}, err
+		}
+		if info.IsDir() {
+			if err := copyTree(sourcePath, pluginRoot); err != nil {
+				return command.Result{}, err
+			}
+		} else {
+			if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
+				return command.Result{}, err
+			}
+			if err := copyTestPath(sourcePath, filepath.Join(pluginRoot, filepath.Base(sourcePath))); err != nil {
+				return command.Result{}, err
+			}
+		}
+	} else {
+		if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
+			return command.Result{}, err
+		}
+	}
+
+	manifestPath := filepath.Join(pluginRoot, "openclaw.plugin.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		if err := os.WriteFile(manifestPath, []byte("{\n  \"id\": \""+pluginID+"\"\n}\n"), 0o644); err != nil {
+			return command.Result{}, err
+		}
+	}
+	packagePath := filepath.Join(pluginRoot, "package.json")
+	if _, err := os.Stat(packagePath); os.IsNotExist(err) {
+		payload := map[string]string{
+			"name":    packageName,
+			"version": version,
+		}
+		data, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return command.Result{}, err
+		}
+		if err := os.WriteFile(packagePath, append(data, '\n'), 0o644); err != nil {
+			return command.Result{}, err
+		}
+	}
+	return command.Result{ExitCode: 0, Stdout: pluginID + "\n"}, nil
+}
+
+func (r *simulatedRuntimeRunner) listPlugins(runtimeRoot string, args []string) (command.Result, error) {
+	plugins, err := r.pluginInventory(runtimeRoot)
+	if err != nil {
+		return command.Result{}, err
+	}
+	for _, arg := range args {
+		if arg == "--json" {
+			data, err := json.Marshal(plugins)
+			if err != nil {
+				return command.Result{}, err
+			}
+			return command.Result{ExitCode: 0, Stdout: string(data)}, nil
+		}
+	}
+	lines := make([]string, 0, len(plugins))
+	for _, plugin := range plugins {
+		lines = append(lines, plugin.Plugin)
+	}
+	sort.Strings(lines)
+	if len(lines) == 0 {
+		return command.Result{ExitCode: 0}, nil
+	}
+	return command.Result{ExitCode: 0, Stdout: strings.Join(lines, "\n") + "\n"}, nil
+}
+
+func (r *simulatedRuntimeRunner) pluginInventory(runtimeRoot string) ([]cli.RuntimePluginInfo, error) {
+	extensionsRoot := filepath.Join(runtimeRoot, "extensions")
+	entries, err := os.ReadDir(extensionsRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	plugins := make([]cli.RuntimePluginInfo, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		root := filepath.Join(extensionsRoot, entry.Name())
+		name := canonicalRuntimePluginName(readRuntimePluginManifestID(root))
+		if name == "" {
+			name = canonicalRuntimePluginName(entry.Name())
+		}
+		packageName, version := readRuntimePluginPackageInfo(root)
+		digest, err := deploystate.New("").DirectoryDigest(root)
+		if err != nil {
+			return nil, err
+		}
+		plugins = append(plugins, cli.RuntimePluginInfo{
+			Plugin:  name,
+			Package: strings.TrimSpace(packageName),
+			Version: strings.TrimSpace(version),
+			Digest:  digest,
+			Source:  runtimePluginSourceNPM,
+		})
+	}
+	sort.Slice(plugins, func(i, j int) bool {
+		return plugins[i].Plugin < plugins[j].Plugin
+	})
+	return plugins, nil
 }
 
 func (r *simulatedRuntimeRunner) handleCopy(args []string) (command.Result, error) {
@@ -118,10 +328,13 @@ func (r *simulatedRuntimeRunner) handleCopy(args []string) (command.Result, erro
 			return command.Result{}, err
 		}
 		copyTarget := hostDestination
-		if info, err := os.Stat(source); err == nil && info.IsDir() {
+		if info, err := os.Stat(source); err == nil {
 			copyTarget = filepath.Join(hostDestination, filepath.Base(source))
+			if info.IsDir() {
+				copyTarget = filepath.Join(hostDestination, filepath.Base(source))
+			}
 		}
-		if err := copyTree(source, copyTarget); err != nil {
+		if err := copyTestPath(source, copyTarget); err != nil {
 			return command.Result{}, err
 		}
 		return command.Result{ExitCode: 0}, nil
@@ -381,6 +594,247 @@ func TestRuntimeCheckpointPromotesBaselineAndClearsReplay(t *testing.T) {
 	}
 }
 
+func TestRuntimePluginInstallRecordsReplayStateAndReplaysOnRedeploy(t *testing.T) {
+	t.Parallel()
+
+	manager, runner, store, runtimeRoot, _ := newRuntimeTestManager(t)
+
+	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("initial DeployService() error = %v", err)
+	}
+
+	installRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "install", Environment: "dev", Runtime: "openclaw-dev", Subject: "semantic-router"}
+	result, err := manager.RuntimePluginInstall(context.Background(), installRoute)
+	if err != nil {
+		t.Fatalf("RuntimePluginInstall() error = %v", err)
+	}
+	if !result.OK || result.Plugin != "semantic-router" || result.Package != "semantic-router@1.2.0" {
+		t.Fatalf("install result = %#v, want semantic-router install", result)
+	}
+
+	log, err := store.LoadReplayLog("openclaw-dev")
+	if err != nil {
+		t.Fatalf("LoadReplayLog() error = %v", err)
+	}
+	if len(log.Events) != 1 || log.Events[0].Type != "plugin_install" || log.Events[0].Plugin != "semantic-router" {
+		t.Fatalf("replay log = %#v, want one semantic-router plugin event", log.Events)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeRoot, "extensions", "semantic-router", "openclaw.plugin.json")); err != nil {
+		t.Fatalf("expected semantic-router plugin in runtime state: %v", err)
+	}
+
+	foundRestart := false
+	for _, command := range runner.commands {
+		if strings.Join(command, " ") == "docker restart openclaw-dev" {
+			foundRestart = true
+			break
+		}
+	}
+	if !foundRestart {
+		t.Fatalf("expected plugin replay to restart the runtime, got commands %#v", runner.commands)
+	}
+
+	if err := os.RemoveAll(filepath.Join(runtimeRoot, "extensions")); err != nil {
+		t.Fatalf("remove runtime plugins: %v", err)
+	}
+	runner.commands = nil
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("second DeployService() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeRoot, "extensions", "semantic-router", "openclaw.plugin.json")); err != nil {
+		t.Fatalf("expected semantic-router plugin after replay-only redeploy: %v", err)
+	}
+}
+
+func TestRuntimePluginRemoveRemovesReplayAndRestoresBaseline(t *testing.T) {
+	t.Parallel()
+
+	manager, _, store, runtimeRoot, _ := newRuntimeTestManager(t)
+
+	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("initial DeployService() error = %v", err)
+	}
+
+	installRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "install", Environment: "dev", Runtime: "openclaw-dev", Subject: "semantic-router"}
+	if _, err := manager.RuntimePluginInstall(context.Background(), installRoute); err != nil {
+		t.Fatalf("RuntimePluginInstall() error = %v", err)
+	}
+
+	removeRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "remove", Environment: "dev", Runtime: "openclaw-dev", Subject: "semantic-router"}
+	result, err := manager.RuntimePluginRemove(context.Background(), removeRoute)
+	if err != nil {
+		t.Fatalf("RuntimePluginRemove() error = %v", err)
+	}
+	if !result.OK || result.Plugin != "semantic-router" {
+		t.Fatalf("remove result = %#v, want successful semantic-router removal", result)
+	}
+
+	log, err := store.LoadReplayLog("openclaw-dev")
+	if err != nil {
+		t.Fatalf("LoadReplayLog() error = %v", err)
+	}
+	if len(log.Events) != 0 {
+		t.Fatalf("replay log = %#v, want empty after plugin remove", log.Events)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeRoot, "extensions", "semantic-router")); !os.IsNotExist(err) {
+		t.Fatalf("expected semantic-router plugin to be absent after remove, stat err = %v", err)
+	}
+}
+
+func TestRuntimePluginCheckpointPromotesBaselineAndClearsReplay(t *testing.T) {
+	t.Parallel()
+
+	manager, runner, store, runtimeRoot, _ := newRuntimeTestManager(t)
+	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("DeployService() error = %v", err)
+	}
+	installRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "install", Environment: "dev", Runtime: "openclaw-dev", Subject: "semantic-router"}
+	if _, err := manager.RuntimePluginInstall(context.Background(), installRoute); err != nil {
+		t.Fatalf("RuntimePluginInstall() error = %v", err)
+	}
+
+	checkpointRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "checkpoint", Environment: "dev", Runtime: "openclaw-dev"}
+	result, err := manager.RuntimeCheckpoint(context.Background(), checkpointRoute)
+	if err != nil {
+		t.Fatalf("RuntimeCheckpoint() error = %v", err)
+	}
+	if !result.OK || !result.ReplayCleared {
+		t.Fatalf("checkpoint result = %#v, want successful checkpoint", result)
+	}
+
+	checkpoint, ok, err := store.LoadCheckpoint("openclaw-dev")
+	if err != nil {
+		t.Fatalf("LoadCheckpoint() error = %v", err)
+	}
+	if !ok || len(checkpoint.Plugins) != 1 || checkpoint.Plugins[0].Name != "semantic-router" {
+		t.Fatalf("checkpoint plugins = %#v, want semantic-router baseline", checkpoint.Plugins)
+	}
+
+	log, err := store.LoadReplayLog("openclaw-dev")
+	if err != nil {
+		t.Fatalf("LoadReplayLog() error = %v", err)
+	}
+	if len(log.Events) != 0 {
+		t.Fatalf("replay log should be empty after checkpoint, got %#v", log.Events)
+	}
+
+	if err := os.RemoveAll(filepath.Join(runtimeRoot, "extensions")); err != nil {
+		t.Fatalf("remove runtime plugins: %v", err)
+	}
+	runner.commands = nil
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("post-checkpoint DeployService() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeRoot, "extensions", "semantic-router", "openclaw.plugin.json")); err != nil {
+		t.Fatalf("expected semantic-router plugin from checkpoint baseline: %v", err)
+	}
+
+	for _, command := range runner.commands {
+		text := strings.Join(command, " ")
+		if strings.Contains(text, "plugins install") {
+			t.Fatalf("post-checkpoint redeploy should not replay plugin installs, got %q", text)
+		}
+	}
+}
+
+func TestRuntimePluginInstallIsIdempotentAgainstBaseline(t *testing.T) {
+	t.Parallel()
+
+	manager, _, store, runtimeRoot, _ := newRuntimeTestManager(t)
+
+	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("initial DeployService() error = %v", err)
+	}
+
+	installRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "install", Environment: "dev", Runtime: "openclaw-dev", Subject: "semantic-router"}
+	if _, err := manager.RuntimePluginInstall(context.Background(), installRoute); err != nil {
+		t.Fatalf("RuntimePluginInstall() error = %v", err)
+	}
+
+	checkpointRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "checkpoint", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.RuntimeCheckpoint(context.Background(), checkpointRoute); err != nil {
+		t.Fatalf("RuntimeCheckpoint() error = %v", err)
+	}
+
+	historyBefore, err := store.ReadDeploymentHistory()
+	if err != nil {
+		t.Fatalf("ReadDeploymentHistory() error = %v", err)
+	}
+
+	result, err := manager.RuntimePluginInstall(context.Background(), installRoute)
+	if err != nil {
+		t.Fatalf("RuntimePluginInstall() after checkpoint error = %v", err)
+	}
+	if !result.OK || !strings.Contains(result.Message, "already present in baseline checkpoint") {
+		t.Fatalf("install result = %#v, want baseline no-op message", result)
+	}
+	if result.EventID != "" || result.DeploymentID != "" {
+		t.Fatalf("install result = %#v, want no deployment or replay identifiers for baseline no-op", result)
+	}
+
+	log, err := store.LoadReplayLog("openclaw-dev")
+	if err != nil {
+		t.Fatalf("LoadReplayLog() error = %v", err)
+	}
+	if len(log.Events) != 0 {
+		t.Fatalf("replay log = %#v, want empty after baseline no-op", log.Events)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeRoot, "extensions", "semantic-router", "openclaw.plugin.json")); err != nil {
+		t.Fatalf("expected semantic-router plugin to remain after baseline no-op: %v", err)
+	}
+
+	historyAfter, err := store.ReadDeploymentHistory()
+	if err != nil {
+		t.Fatalf("ReadDeploymentHistory() error = %v", err)
+	}
+	if len(historyAfter) != len(historyBefore) {
+		t.Fatalf("deployment history len = %d, want unchanged %d", len(historyAfter), len(historyBefore))
+	}
+}
+
+func TestRuntimeReplayInstallsPluginsBeforeSkills(t *testing.T) {
+	t.Parallel()
+
+	manager, runner, _, _, _ := newRuntimeTestManager(t)
+	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("initial DeployService() error = %v", err)
+	}
+
+	installPluginRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "install", Environment: "dev", Runtime: "openclaw-dev", Subject: "semantic-router"}
+	if _, err := manager.RuntimePluginInstall(context.Background(), installPluginRoute); err != nil {
+		t.Fatalf("RuntimePluginInstall() error = %v", err)
+	}
+	installSkillRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeSkill, Action: "deploy", Environment: "dev", Runtime: "openclaw-dev", Subject: "together"}
+	if _, err := manager.RuntimeSkillDeploy(context.Background(), installSkillRoute); err != nil {
+		t.Fatalf("RuntimeSkillDeploy() error = %v", err)
+	}
+
+	runner.commands = nil
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("replay DeployService() error = %v", err)
+	}
+
+	pluginInstallIndex := -1
+	skillReplayIndex := -1
+	for index, command := range runner.commands {
+		text := strings.Join(command, " ")
+		if pluginInstallIndex < 0 && strings.Contains(text, "openclaw plugins install") {
+			pluginInstallIndex = index
+		}
+		if skillReplayIndex < 0 && strings.Contains(text, filepath.Join("deploy", "runtime", "openclaw-dev", "packages")) {
+			skillReplayIndex = index
+		}
+	}
+	if pluginInstallIndex < 0 || skillReplayIndex < 0 || pluginInstallIndex >= skillReplayIndex {
+		t.Fatalf("expected plugin replay before skill replay, got commands %#v", runner.commands)
+	}
+}
+
 func TestRuntimeReplayFailsWhenStagedPackageDigestChanges(t *testing.T) {
 	t.Parallel()
 
@@ -439,6 +893,7 @@ func newRuntimeTestManager(t *testing.T) (*Manager, *simulatedRuntimeRunner, *de
 	mustWriteFile(t, filepath.Join(runtimeRepoRoot, "openclaw-dev", "model-runtime.yml"), "model: local\n")
 	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "together-escalation", "SKILL.md"), "---\nname: together-escalation\ndescription: test\n---\n")
 	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "semantic-router", "SKILL.md"), "---\nname: semantic-router\ndescription: test\n---\n")
+	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "semantic-router", "package.json"), "{\n  \"name\": \"semantic-router\",\n  \"version\": \"1.2.0\"\n}\n")
 	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "semantic-router", "openclaw.plugin.json"), "{\n  \"id\": \"semantic-router\"\n}\n")
 
 	runner := &simulatedRuntimeRunner{
@@ -477,6 +932,51 @@ func newRuntimeTestManager(t *testing.T) (*Manager, *simulatedRuntimeRunner, *de
 	}, runner, nil)
 
 	return manager, runner, deploystate.New(stateRoot), filepath.Join(runtimeStateRoot, "openclaw-dev"), skillsRoot
+}
+
+func runtimePluginHostPath(runtimeRoot, spec string) string {
+	if strings.HasPrefix(filepath.ToSlash(spec), "/home/node/.openclaw/") {
+		return runtimeHostPath(runtimeRoot, spec)
+	}
+	if _, err := os.Stat(spec); err == nil {
+		return spec
+	}
+	return ""
+}
+
+func runtimePackageVersionFromSpec(spec string) string {
+	trimmed := strings.TrimSpace(spec)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "@") {
+		if index := strings.LastIndex(trimmed, "@"); index > 0 {
+			return trimmed[index+1:]
+		}
+		return ""
+	}
+	if index := strings.Index(trimmed, "@"); index > 0 {
+		return trimmed[index+1:]
+	}
+	return ""
+}
+
+func copyTestPath(source, destination string) error {
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return copyTree(source, destination)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(destination, data, 0o644)
 }
 
 func splitContainerPath(value string) (string, string) {

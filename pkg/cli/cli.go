@@ -28,6 +28,7 @@ const (
 	KindGatewayToken   = "gateway_token"
 	KindScopedSecrets  = "scoped_secrets"
 	KindRuntimeAction  = "runtime_action"
+	KindRuntimePlugin  = "runtime_plugin"
 	KindRuntimeSkill   = "runtime_skill"
 	KindRuntimeNative  = "runtime_openclaw"
 	KindServiceNative  = "service_passthrough"
@@ -188,6 +189,39 @@ type RuntimeSkillResult struct {
 	EventID        string `json:"event_id,omitempty"`
 	PackageDir     string `json:"package_dir,omitempty"`
 	ReplayCount    int    `json:"replay_count,omitempty"`
+}
+
+type RuntimePluginInfo struct {
+	Plugin  string `json:"plugin"`
+	Package string `json:"package,omitempty"`
+	Version string `json:"version,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+	Source  string `json:"source,omitempty"`
+}
+
+type RuntimePluginResult struct {
+	OK           bool   `json:"ok"`
+	Route        *Route `json:"route"`
+	Runtime      string `json:"runtime"`
+	Plugin       string `json:"plugin"`
+	Package      string `json:"package,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Digest       string `json:"digest,omitempty"`
+	Source       string `json:"source,omitempty"`
+	Action       string `json:"action"`
+	Message      string `json:"message,omitempty"`
+	DeploymentID string `json:"deployment_id,omitempty"`
+	EventID      string `json:"event_id,omitempty"`
+	PackageDir   string `json:"package_dir,omitempty"`
+	SourcePath   string `json:"source_path,omitempty"`
+	ReplayCount  int    `json:"replay_count,omitempty"`
+}
+
+type RuntimePluginListResult struct {
+	OK      bool                `json:"ok"`
+	Route   *Route              `json:"route"`
+	Runtime string              `json:"runtime"`
+	Plugins []RuntimePluginInfo `json:"plugins,omitempty"`
 }
 
 type CommandResult struct {
@@ -508,7 +542,7 @@ func parseRuntime(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("missing command for environment '%s'", args[0]),
-				fmt.Sprintf("use: %s reload|checkpoint|skill deploy <skill>|skill rollback <skill>|openclaw <command>|secrets <command>", args[0]),
+				fmt.Sprintf("use: %s reload|checkpoint|skill deploy <skill>|skill list|skill remove <skill>|plugin install <package>|plugin list|plugin remove <plugin>|openclaw <command>|secrets <command>", args[0]),
 			),
 			Code: ExitParseError,
 		}
@@ -538,6 +572,8 @@ func parseRuntime(args []string) ParseResult {
 		return ParseResult{Route: route}
 	case "skill":
 		return parseRuntimeSkill(route, args)
+	case "plugin":
+		return parseRuntimePlugin(route, args)
 	case "openclaw":
 		if len(args) < 3 {
 			return ParseResult{
@@ -560,7 +596,7 @@ func parseRuntime(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown environment command '%s'", args[1]),
-				fmt.Sprintf("use: %s reload|checkpoint|skill deploy <skill>|skill rollback <skill>|openclaw <command>|secrets <command>", args[0]),
+				fmt.Sprintf("use: %s reload|checkpoint|skill deploy <skill>|skill list|skill remove <skill>|plugin install <package>|plugin list|plugin remove <plugin>|openclaw <command>|secrets <command>", args[0]),
 			),
 			Code: ExitParseError,
 		}
@@ -568,21 +604,38 @@ func parseRuntime(args []string) ParseResult {
 }
 
 func parseRuntimeSkill(route *Route, args []string) ParseResult {
-	if len(args) != 4 {
-		return ParseResult{
-			Envelope: Error(nil,
-				"parse_error",
-				fmt.Sprintf("invalid skill command for environment '%s'", args[0]),
-				fmt.Sprintf("use: %s skill deploy <skill> | %s skill rollback <skill>", args[0], args[0]),
-			),
-			Code: ExitParseError,
-		}
-	}
-
 	switch args[2] {
-	case "deploy", "rollback":
+	case "list":
+		if len(args) != 3 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("unexpected arguments after '%s skill list'", args[0]),
+					fmt.Sprintf("use: %s skill list", args[0]),
+				),
+				Code: ExitParseError,
+			}
+		}
 		route.Kind = KindRuntimeSkill
-		route.Action = args[2]
+		route.Action = "list"
+		return ParseResult{Route: route}
+	case "deploy", "remove", "rollback":
+		if len(args) != 4 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("invalid skill command for environment '%s'", args[0]),
+					fmt.Sprintf("use: %s skill deploy <skill> | %s skill list | %s skill remove <skill>", args[0], args[0], args[0]),
+				),
+				Code: ExitParseError,
+			}
+		}
+		route.Kind = KindRuntimeSkill
+		if args[2] == "rollback" {
+			route.Action = "remove"
+		} else {
+			route.Action = args[2]
+		}
 		route.Subject = args[3]
 		return ParseResult{Route: route}
 	default:
@@ -590,7 +643,61 @@ func parseRuntimeSkill(route *Route, args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown skill action '%s'", args[2]),
-				fmt.Sprintf("use: %s skill deploy <skill> | %s skill rollback <skill>", args[0], args[0]),
+				fmt.Sprintf("use: %s skill deploy <skill> | %s skill list | %s skill remove <skill>", args[0], args[0], args[0]),
+			),
+			Code: ExitParseError,
+		}
+	}
+}
+
+func parseRuntimePlugin(route *Route, args []string) ParseResult {
+	if len(args) < 3 {
+		return ParseResult{
+			Envelope: Error(nil,
+				"parse_error",
+				fmt.Sprintf("missing plugin action for environment '%s'", args[0]),
+				fmt.Sprintf("use: %s plugin install <package> | %s plugin list | %s plugin remove <plugin>", args[0], args[0], args[0]),
+			),
+			Code: ExitParseError,
+		}
+	}
+
+	switch args[2] {
+	case "list":
+		if len(args) != 3 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("unexpected arguments after '%s plugin list'", args[0]),
+					fmt.Sprintf("use: %s plugin list", args[0]),
+				),
+				Code: ExitParseError,
+			}
+		}
+		route.Kind = KindRuntimePlugin
+		route.Action = "list"
+		return ParseResult{Route: route}
+	case "install", "remove":
+		if len(args) != 4 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("invalid plugin command for environment '%s'", args[0]),
+					fmt.Sprintf("use: %s plugin install <package> | %s plugin list | %s plugin remove <plugin>", args[0], args[0], args[0]),
+				),
+				Code: ExitParseError,
+			}
+		}
+		route.Kind = KindRuntimePlugin
+		route.Action = args[2]
+		route.Subject = args[3]
+		return ParseResult{Route: route}
+	default:
+		return ParseResult{
+			Envelope: Error(nil,
+				"parse_error",
+				fmt.Sprintf("unknown plugin action '%s'", args[2]),
+				fmt.Sprintf("use: %s plugin install <package> | %s plugin list | %s plugin remove <plugin>", args[0], args[0], args[0]),
 			),
 			Code: ExitParseError,
 		}
@@ -862,7 +969,11 @@ Resources:
     reload
     checkpoint
     skill deploy <skill>
-    skill rollback <skill>
+    skill list
+    skill remove <skill>
+    plugin install <package>
+    plugin list
+    plugin remove <plugin>
     openclaw <command>
     secrets set <name> [value]
     secrets list

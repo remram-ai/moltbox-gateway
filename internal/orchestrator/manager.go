@@ -1,12 +1,14 @@
 package orchestrator
 
 import (
+	"crypto/sha256"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -27,6 +29,7 @@ import (
 )
 
 const internalNetworkName = "moltbox_internal"
+const defaultApplianceHistoryPath = "/var/lib/moltbox/history.jsonl"
 
 type ContainerInspector interface {
 	InspectContainer(ctx context.Context, name string) (docker.ContainerInfo, error)
@@ -170,8 +173,11 @@ func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.Serv
 
 	stagingRoot := filepath.Join(m.config.Paths.StateRoot, "updates", "gateway")
 	configSource := filepath.Join(outputDir, "config", "gateway", "config.yaml")
-	updateScript := buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, configSource, outputDir, definition.ComposeProject, m.config.Paths.SecretsRoot)
-	commandArgs := gatewayUpdateHelperCommand(m.config, repoRoot, cliPath, cliConfigPath, updateScript)
+	operator := currentOperator()
+	oldVersion := gitRevision(repoRoot)
+	source := gitSource(repoRoot)
+	updateScript := buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, configSource, outputDir, definition.ComposeProject, m.config.Paths.SecretsRoot, defaultApplianceHistoryPath)
+	commandArgs := gatewayUpdateHelperCommand(m.config, repoRoot, cliPath, cliConfigPath, updateScript, defaultApplianceHistoryPath, operator)
 
 	result, err := m.runner.Run(ctx, "", "docker", commandArgs...)
 	if err != nil {
@@ -179,6 +185,32 @@ func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.Serv
 	}
 	if result.ExitCode != 0 {
 		return cli.ServiceActionResult{}, fmt.Errorf("gateway update helper failed: %s", strings.TrimSpace(result.Stdout))
+	}
+	newVersion := gitRevision(repoRoot)
+	checksum, err := fileSHA256(filepath.Join(stagingRoot, "gateway"))
+	if err != nil {
+		return cli.ServiceActionResult{}, fmt.Errorf("compute gateway update checksum: %w", err)
+	}
+	record := deploystate.DeploymentRecord{
+		DeploymentID:    newGatewayID("deploy"),
+		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+		Actor:           operator,
+		Target:          "gateway",
+		ArtifactVersion: newVersion,
+		PreviousVersion: oldVersion,
+		Result:          "success",
+		Operation:       "gateway_update",
+		Details: map[string]string{
+			"source":     source,
+			"checksum":   checksum,
+			"component":  "gateway",
+			"history":    defaultApplianceHistoryPath,
+			"cli_path":   cliPath,
+			"config_path": cliConfigPath,
+		},
+	}
+	if err := m.stateStore.AppendDeployment(record); err != nil {
+		return cli.ServiceActionResult{}, fmt.Errorf("record gateway update deployment: %w", err)
 	}
 
 	return cli.ServiceActionResult{
@@ -190,7 +222,7 @@ func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.Serv
 	}, nil
 }
 
-func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigPath, updateScript string) []string {
+func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigPath, updateScript, historyPath, operator string) []string {
 	cliWrapperPath := "/usr/local/bin/moltbox-cli-wrapper"
 	bootstrapWrapperPath := "/usr/local/bin/moltbox-bootstrap-wrapper"
 	systemConfigPath := "/etc/moltbox/config.yaml"
@@ -211,6 +243,7 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 		repoRoot,
 		filepath.Dir(cliPath),
 		filepath.Dir(cliConfigPath),
+		path.Dir(historyPath),
 		path.Dir(cliWrapperPath),
 		path.Dir(bootstrapWrapperPath),
 		path.Dir(systemConfigPath),
@@ -219,6 +252,7 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 	}
 
 	commandArgs = append(commandArgs,
+		"-e", fmt.Sprintf("MOLTBOX_OPERATOR=%s", operator),
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
 		"moltbox-gateway:latest",
 		"-lc",
@@ -227,7 +261,7 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 	return commandArgs
 }
 
-func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, configSource, gatewayOutputDir, composeProject, secretsRoot string) string {
+func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, configSource, gatewayOutputDir, composeProject, secretsRoot, historyPath string) string {
 	cliWrapperSource := filepath.Join(repoRoot, "scripts", "moltbox-cli-wrapper.sh")
 	cliWrapperPath := "/usr/local/bin/moltbox-cli-wrapper"
 	bootstrapWrapperSource := filepath.Join(repoRoot, "scripts", "moltbox-bootstrap-wrapper.sh")
@@ -250,10 +284,19 @@ func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, con
 		fmt.Sprintf("BOOTSTRAP_WRAPPER_PATH=%s", shellQuote(bootstrapWrapperPath)),
 		fmt.Sprintf("SHARED_CLI_PATH=%s", shellQuote(sharedCLIPath)),
 		fmt.Sprintf("SYSTEM_CONFIG_PATH=%s", shellQuote(systemConfigPath)),
+		fmt.Sprintf("HISTORY_PATH=%s", shellQuote(historyPath)),
 		`mkdir -p "$STAGING_ROOT" "$(dirname "$CLI_PATH")" "$(dirname "$CLI_CONFIG_PATH")" "$(dirname "$SYSTEM_CONFIG_PATH")"`,
 		`mkdir -p "$SECRETS_ROOT"`,
+		`mkdir -p "$(dirname "$HISTORY_PATH")"`,
+		`OLD_VERSION=""`,
+		`if [ -d "$REPO/.git" ] && git -C "$REPO" rev-parse HEAD >/dev/null 2>&1; then OLD_VERSION="$(git -C "$REPO" rev-parse HEAD)"; fi`,
+		`SOURCE="$REPO"`,
+		`if [ -d "$REPO/.git" ] && git -C "$REPO" remote get-url origin >/dev/null 2>&1; then SOURCE="$(git -C "$REPO" remote get-url origin)"; fi`,
 		`if [ -d "$REPO/.git" ] && git -C "$REPO" remote get-url origin >/dev/null 2>&1; then git -C "$REPO" fetch --all --tags --prune && git -C "$REPO" pull --ff-only; fi`,
+		`NEW_VERSION="$OLD_VERSION"`,
+		`if [ -d "$REPO/.git" ] && git -C "$REPO" rev-parse HEAD >/dev/null 2>&1; then NEW_VERSION="$(git -C "$REPO" rev-parse HEAD)"; fi`,
 		`docker run --rm -v "$REPO:/src" -v "$STAGING_ROOT:/out" -w /src golang:1.23-bookworm sh -lc 'set -eu; /usr/local/go/bin/go build -buildvcs=false -o /out/moltbox ./cmd/moltbox && /usr/local/go/bin/go build -buildvcs=false -o /out/gateway ./cmd/gateway'`,
+		`CHECKSUM="$(sha256sum "$STAGING_ROOT/gateway" | awk '{print $1}')"`,
 		`cp "$STAGING_ROOT/moltbox" "$CLI_PATH"`,
 		`chmod 0755 "$CLI_PATH"`,
 		`cp "$STAGING_ROOT/moltbox" "$SHARED_CLI_PATH"`,
@@ -274,7 +317,140 @@ func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, con
 		`docker build -t moltbox-gateway:latest "$REPO"`,
 		`docker rm -f gateway >/dev/null 2>&1 || true`,
 		`cd "$GATEWAY_OUTPUT_DIR" && docker compose -f compose.yml -p "$COMPOSE_PROJECT" up -d --remove-orphans`,
+		`JSON_ESCAPE() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }`,
+		`TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"`,
+		`OPERATOR="${MOLTBOX_OPERATOR:-${SUDO_USER:-${USER:-gateway}}}"`,
+		`printf '{"timestamp":"%s","component":"gateway","old_version":"%s","new_version":"%s","source":"%s","checksum":"%s","operator":"%s"}\n' "$TIMESTAMP" "$(JSON_ESCAPE "$OLD_VERSION")" "$(JSON_ESCAPE "$NEW_VERSION")" "$(JSON_ESCAPE "$SOURCE")" "$(JSON_ESCAPE "$CHECKSUM")" "$(JSON_ESCAPE "$OPERATOR")" >> "$HISTORY_PATH"`,
+		`chmod 0644 "$HISTORY_PATH"`,
 	}, "; ")
+}
+
+func gitRevision(repoRoot string) string {
+	gitDir, err := resolveGitDir(repoRoot)
+	if err != nil {
+		return ""
+	}
+
+	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return ""
+	}
+	value := strings.TrimSpace(string(head))
+	if !strings.HasPrefix(value, "ref: ") {
+		return value
+	}
+	revision, err := readGitRef(gitDir, strings.TrimSpace(strings.TrimPrefix(value, "ref: ")))
+	if err != nil {
+		return ""
+	}
+	return revision
+}
+
+func gitSource(repoRoot string) string {
+	gitDir, err := resolveGitDir(repoRoot)
+	if err != nil {
+		return repoRoot
+	}
+
+	data, err := os.ReadFile(filepath.Join(gitDir, "config"))
+	if err != nil {
+		return repoRoot
+	}
+
+	inOrigin := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inOrigin = line == `[remote "origin"]`
+			continue
+		}
+		if !inOrigin || !strings.HasPrefix(line, "url") {
+			continue
+		}
+		_, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return repoRoot
+}
+
+func resolveGitDir(repoRoot string) (string, error) {
+	gitPath := filepath.Join(repoRoot, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return gitPath, nil
+	}
+
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return "", err
+	}
+	content := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(content, "gitdir:") {
+		return "", fmt.Errorf("unsupported gitdir format in %s", gitPath)
+	}
+
+	gitDir := strings.TrimSpace(strings.TrimPrefix(content, "gitdir:"))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(repoRoot, gitDir)
+	}
+	return filepath.Clean(gitDir), nil
+}
+
+func readGitRef(gitDir, ref string) (string, error) {
+	refPath := filepath.Join(gitDir, filepath.FromSlash(ref))
+	data, err := os.ReadFile(refPath)
+	if err == nil {
+		return strings.TrimSpace(string(data)), nil
+	}
+	return readPackedGitRef(gitDir, ref)
+}
+
+func readPackedGitRef(gitDir, ref string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(gitDir, "packed-refs"))
+	if err != nil {
+		return "", err
+	}
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "^") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != ref {
+			continue
+		}
+		return fields[0], nil
+	}
+	return "", fmt.Errorf("ref %s not found in packed-refs", ref)
+}
+
+func fileSHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func currentOperator() string {
+	for _, key := range []string{"MOLTBOX_OPERATOR", "SUDO_USER", "USER", "USERNAME"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return "gateway"
 }
 
 func (m *Manager) RestartService(ctx context.Context, route *cli.Route, service string) (cli.ServiceActionResult, error) {

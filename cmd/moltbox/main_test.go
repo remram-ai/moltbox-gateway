@@ -83,7 +83,7 @@ func TestCLIForwardsToGateway(t *testing.T) {
 			args:       []string{"gateway", "service", "deploy", "opensearch"},
 			wantMethod: http.MethodPost,
 			wantPath:   "/service/deploy",
-			wantCode:   cli.ExitNotImplemented,
+			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
 				var payload cli.RouteRequest
@@ -93,11 +93,11 @@ func TestCLIForwardsToGateway(t *testing.T) {
 				if payload.Service != "opensearch" {
 					t.Fatalf("payload.service = %q, want opensearch", payload.Service)
 				}
-				_ = json.NewEncoder(writer).Encode(cli.NotImplemented(
-					&cli.Route{Resource: "gateway", Kind: cli.KindGatewayService, Action: "deploy", Subject: "opensearch"},
-					"gateway service deploy opensearch is not implemented in phase 1",
-					"phase 1 only boots the direct localhost control channel",
-				))
+				_ = json.NewEncoder(writer).Encode(cli.ServiceDeployResult{
+					OK:      true,
+					Route:   &cli.Route{Resource: "gateway", Kind: cli.KindGatewayService, Action: "deploy", Subject: "opensearch"},
+					Service: "opensearch",
+				})
 			},
 		},
 		{
@@ -228,10 +228,31 @@ func TestCLIForwardsToGateway(t *testing.T) {
 			},
 		},
 		{
-			name:       "runtime skill rollback",
-			args:       []string{"dev", "skill", "rollback", "together"},
+			name:       "runtime skill list",
+			args:       []string{"dev", "skill", "list"},
 			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/skill/rollback",
+			wantPath:   "/runtime/skill/list",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.CommandResult{
+					OK:             true,
+					Route:          payload.Route,
+					ContainerName:  "openclaw-dev",
+					ExitCode:       0,
+					Stdout:         "together-escalation\n",
+				})
+			},
+		},
+		{
+			name:       "runtime skill remove",
+			args:       []string{"dev", "skill", "remove", "together"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/runtime/skill/remove",
 			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
@@ -245,9 +266,87 @@ func TestCLIForwardsToGateway(t *testing.T) {
 					Runtime:        "openclaw-dev",
 					Skill:          "together",
 					CanonicalSkill: "together-escalation",
-					Action:         "rollback",
-					DeploymentID:   "deploy-rollback-123",
+					Action:         "remove",
+					DeploymentID:   "deploy-remove-123",
 					EventID:        "event-123",
+				})
+			},
+		},
+		{
+			name:       "runtime plugin install",
+			args:       []string{"dev", "plugin", "install", "semantic-router"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/runtime/plugin/install",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.RuntimePluginResult{
+					OK:           true,
+					Route:        payload.Route,
+					Runtime:      "openclaw-dev",
+					Plugin:       "semantic-router",
+					Package:      "semantic-router@1.2.0",
+					Version:      "1.2.0",
+					Digest:       "sha256:digest",
+					Source:       "npm",
+					Action:       "install",
+					DeploymentID: "deploy-plugin-123",
+					EventID:      "event-plugin-123",
+					PackageDir:   "/srv/moltbox-state/deploy/runtime/openclaw-dev/packages/event-plugin-123",
+					ReplayCount:  1,
+				})
+			},
+		},
+		{
+			name:       "runtime plugin list",
+			args:       []string{"dev", "plugin", "list"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/runtime/plugin/list",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.RuntimePluginListResult{
+					OK:      true,
+					Route:   payload.Route,
+					Runtime: "openclaw-dev",
+					Plugins: []cli.RuntimePluginInfo{
+						{Plugin: "semantic-router", Package: "semantic-router@1.2.0", Version: "1.2.0", Digest: "sha256:digest", Source: "npm"},
+					},
+				})
+			},
+		},
+		{
+			name:       "runtime plugin remove",
+			args:       []string{"dev", "plugin", "remove", "semantic-router"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/runtime/plugin/remove",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.RuntimePluginResult{
+					OK:           true,
+					Route:        payload.Route,
+					Runtime:      "openclaw-dev",
+					Plugin:       "semantic-router",
+					Package:      "semantic-router@1.2.0",
+					Version:      "1.2.0",
+					Digest:       "sha256:digest",
+					Source:       "npm",
+					Action:       "remove",
+					DeploymentID: "deploy-plugin-remove-123",
+					EventID:      "event-plugin-123",
 				})
 			},
 		},
@@ -430,9 +529,9 @@ func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
 			wantRuntime: "openclaw-dev",
 		},
 		{
-			name:        "test skill rollback",
-			args:        []string{"test", "skill", "rollback", "together"},
-			wantPath:    "/runtime/skill/rollback",
+			name:        "test skill remove",
+			args:        []string{"test", "skill", "remove", "together"},
+			wantPath:    "/runtime/skill/remove",
 			wantEnv:     "test",
 			wantRuntime: "openclaw-test",
 		},
@@ -440,6 +539,27 @@ func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
 			name:        "prod checkpoint",
 			args:        []string{"prod", "checkpoint"},
 			wantPath:    "/runtime/checkpoint",
+			wantEnv:     "prod",
+			wantRuntime: "openclaw-prod",
+		},
+		{
+			name:        "dev plugin install",
+			args:        []string{"dev", "plugin", "install", "semantic-router"},
+			wantPath:    "/runtime/plugin/install",
+			wantEnv:     "dev",
+			wantRuntime: "openclaw-dev",
+		},
+		{
+			name:        "test plugin remove",
+			args:        []string{"test", "plugin", "remove", "semantic-router"},
+			wantPath:    "/runtime/plugin/remove",
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+		},
+		{
+			name:        "prod plugin list",
+			args:        []string{"prod", "plugin", "list"},
+			wantPath:    "/runtime/plugin/list",
 			wantEnv:     "prod",
 			wantRuntime: "openclaw-prod",
 		},
@@ -477,6 +597,28 @@ func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
 						Image:         "moltbox-runtime:" + testCase.wantRuntime + "-checkpoint-123",
 						SnapshotDir:   "/srv/moltbox-state/runtime-baselines/" + testCase.wantRuntime + "/checkpoint-123/snapshot",
 						ReplayCleared: true,
+					})
+				case "/runtime/plugin/list":
+					_ = json.NewEncoder(writer).Encode(cli.RuntimePluginListResult{
+						OK:      true,
+						Route:   payload.Route,
+						Runtime: testCase.wantRuntime,
+						Plugins: []cli.RuntimePluginInfo{
+							{Plugin: "semantic-router", Package: "semantic-router@1.2.0", Version: "1.2.0", Digest: "sha256:digest", Source: "npm"},
+						},
+					})
+				case "/runtime/plugin/install", "/runtime/plugin/remove":
+					_ = json.NewEncoder(writer).Encode(cli.RuntimePluginResult{
+						OK:      true,
+						Route:   payload.Route,
+						Runtime: testCase.wantRuntime,
+						Plugin:  "semantic-router",
+						Package: "semantic-router@1.2.0",
+						Version: "1.2.0",
+						Digest:  "sha256:digest",
+						Source:  "npm",
+						Action:  payload.Route.Action,
+						Message: "ok",
 					})
 				default:
 					_ = json.NewEncoder(writer).Encode(cli.RuntimeSkillResult{

@@ -43,6 +43,19 @@ func TestStoreWritesGatewayStateWithoutLeavingTemps(t *testing.T) {
 		BaselineCheckpoint: "checkpoint-1",
 		Events: []ReplayEvent{
 			{
+				EventID:      "event-plugin-1",
+				DeploymentID: "deploy-plugin-1",
+				Timestamp:    "2026-03-14T20:00:30Z",
+				Runtime:      "openclaw-dev",
+				Type:         "plugin_install",
+				Plugin:       "semantic-router",
+				Package:      "semantic-router@1.2.0",
+				Version:      "1.2.0",
+				Digest:       "sha256:plugin-digest-1",
+				Source:       "npm",
+				PackageDir:   "/srv/moltbox-state/deploy/runtime/openclaw-dev/packages/event-plugin-1",
+			},
+			{
 				EventID:       "event-1",
 				DeploymentID:  "deploy-2",
 				Timestamp:     "2026-03-14T20:01:00Z",
@@ -64,6 +77,9 @@ func TestStoreWritesGatewayStateWithoutLeavingTemps(t *testing.T) {
 		Image:        "moltbox-runtime:openclaw-dev-checkpoint-1",
 		SnapshotDir:  "/srv/moltbox-state/runtime-baselines/openclaw-dev/checkpoint-1/snapshot",
 		DeploymentID: "deploy-3",
+		Plugins: []CheckpointPlugin{
+			{Name: "semantic-router", Package: "semantic-router@1.2.0", Version: "1.2.0", Digest: "sha256:plugin-digest-1", Source: "npm"},
+		},
 		Skills: []CheckpointSkill{
 			{Name: "together-escalation", Digest: "digest-1"},
 		},
@@ -83,8 +99,8 @@ func TestStoreWritesGatewayStateWithoutLeavingTemps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadReplayLog() error = %v", err)
 	}
-	if len(log.Events) != 1 {
-		t.Fatalf("replay log = %#v, want one event", log.Events)
+	if len(log.Events) != 2 {
+		t.Fatalf("replay log = %#v, want two events", log.Events)
 	}
 
 	checkpoint, ok, err := store.LoadCheckpoint("openclaw-dev")
@@ -93,6 +109,17 @@ func TestStoreWritesGatewayStateWithoutLeavingTemps(t *testing.T) {
 	}
 	if !ok || checkpoint.CheckpointID != "checkpoint-1" {
 		t.Fatalf("checkpoint = %#v, ok=%v, want checkpoint-1", checkpoint, ok)
+	}
+	if len(checkpoint.Plugins) != 1 || checkpoint.Plugins[0].Name != "semantic-router" {
+		t.Fatalf("checkpoint plugins = %#v, want semantic-router", checkpoint.Plugins)
+	}
+
+	plugins, err := store.ReplayPluginState("openclaw-dev")
+	if err != nil {
+		t.Fatalf("ReplayPluginState() error = %v", err)
+	}
+	if plugin := plugins["semantic-router"]; plugin.Digest != "sha256:plugin-digest-1" {
+		t.Fatalf("replay plugin state = %#v, want semantic-router digest", plugins)
 	}
 
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {

@@ -111,7 +111,7 @@ service
 skill
   deploy <skill>
     flags: --runtime <openclaw|openclaw-dev|openclaw-test|openclaw-prod>
-    purpose: deploy a pure skill or plugin-backed skill into an OpenClaw runtime
+    purpose: deploy a skill package into an OpenClaw runtime
 ```
 
 ### Component namespaces implemented in the legacy CLI
