@@ -83,7 +83,7 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 		return cli.ServiceDeployResult{}, err
 	}
 
-	if !definition.SkipPull {
+	if !definition.SkipPull && !m.shouldSkipPull(canonicalService) {
 		pullResult, err := m.runner.Run(ctx, outputDir, "docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "pull")
 		if err != nil {
 			return cli.ServiceDeployResult{}, err
@@ -125,6 +125,13 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 		Command:        append([]string{"docker"}, commandArgs...),
 		Containers:     containers,
 	}, nil
+}
+
+func (m *Manager) shouldSkipPull(service string) bool {
+	if !isRuntimeService(service) {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(m.selectedRuntimeImage(service)), "moltbox-runtime:")
 }
 
 func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.ServiceActionResult, error) {
