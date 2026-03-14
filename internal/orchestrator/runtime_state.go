@@ -278,7 +278,16 @@ func (m *Manager) installSkillFromGatewayState(ctx context.Context, service stri
 	if destination == "" {
 		destination = filepath.ToSlash(filepath.Join("/home/node/.openclaw/skills", event.Skill))
 	}
-	command := fmt.Sprintf("rm -rf %s && mkdir -p %s", shellQuote(destination), shellQuote(destination))
+	parent := filepath.ToSlash(filepath.Dir(destination))
+	stagingRoot := "/home/node/.openclaw/.moltbox-replay"
+	stagingPath := filepath.ToSlash(filepath.Join(stagingRoot, event.EventID))
+	command := fmt.Sprintf(
+		"rm -rf %s %s && mkdir -p %s %s",
+		shellQuote(destination),
+		shellQuote(stagingPath),
+		shellQuote(parent),
+		shellQuote(stagingRoot),
+	)
 	resetResult, err := m.runner.Run(ctx, "", "docker", "exec", service, "sh", "-lc", command)
 	if err != nil {
 		return fmt.Errorf("reset skill destination for %s: %w", event.Skill, err)
@@ -287,13 +296,21 @@ func (m *Manager) installSkillFromGatewayState(ctx context.Context, service stri
 		return fmt.Errorf("reset skill destination for %s failed: %s", event.Skill, strings.TrimSpace(resetResult.Stdout))
 	}
 
-	copySource := filepath.Join(event.PackageDir, ".")
-	copyResult, err := m.runner.Run(ctx, "", "docker", "cp", copySource, fmt.Sprintf("%s:%s", service, destination))
+	copyResult, err := m.runner.Run(ctx, "", "docker", "cp", event.PackageDir, fmt.Sprintf("%s:%s", service, stagingRoot))
 	if err != nil {
 		return fmt.Errorf("copy skill package for %s: %w", event.Skill, err)
 	}
 	if copyResult.ExitCode != 0 {
 		return fmt.Errorf("copy skill package for %s failed: %s", event.Skill, strings.TrimSpace(copyResult.Stdout))
+	}
+
+	moveCommand := fmt.Sprintf("rm -rf %s && mv %s %s", shellQuote(destination), shellQuote(stagingPath), shellQuote(destination))
+	moveResult, err := m.runner.Run(ctx, "", "docker", "exec", service, "sh", "-lc", moveCommand)
+	if err != nil {
+		return fmt.Errorf("activate skill package for %s: %w", event.Skill, err)
+	}
+	if moveResult.ExitCode != 0 {
+		return fmt.Errorf("activate skill package for %s failed: %s", event.Skill, strings.TrimSpace(moveResult.Stdout))
 	}
 	return nil
 }

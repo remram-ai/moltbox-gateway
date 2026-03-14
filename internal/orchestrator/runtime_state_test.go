@@ -58,16 +58,28 @@ func (r *simulatedRuntimeRunner) handleExec(args []string) (command.Result, erro
 	}
 
 	commandText := args[len(args)-1]
-	destination := shellPathValue(commandText, "rm -rf ")
-	if destination == "" {
-		return command.Result{ExitCode: 0}, nil
+	for _, path := range shellQuotedArgsAfter(commandText, "rm -rf ") {
+		hostPath := runtimeHostPath(runtimeRoot, path)
+		if err := os.RemoveAll(hostPath); err != nil {
+			return command.Result{}, err
+		}
 	}
-	hostPath := runtimeHostPath(runtimeRoot, destination)
-	if err := os.RemoveAll(hostPath); err != nil {
-		return command.Result{}, err
+	for _, path := range shellQuotedArgsAfter(commandText, "mkdir -p ") {
+		hostPath := runtimeHostPath(runtimeRoot, path)
+		if err := os.MkdirAll(hostPath, 0o755); err != nil {
+			return command.Result{}, err
+		}
 	}
-	if err := os.MkdirAll(hostPath, 0o755); err != nil {
-		return command.Result{}, err
+	moveArgs := shellQuotedArgsAfter(commandText, "mv ")
+	if len(moveArgs) == 2 {
+		source := runtimeHostPath(runtimeRoot, moveArgs[0])
+		destination := runtimeHostPath(runtimeRoot, moveArgs[1])
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			return command.Result{}, err
+		}
+		if err := os.Rename(source, destination); err != nil {
+			return command.Result{}, err
+		}
 	}
 	return command.Result{ExitCode: 0}, nil
 }
@@ -101,7 +113,11 @@ func (r *simulatedRuntimeRunner) handleCopy(args []string) (command.Result, erro
 		if err := os.MkdirAll(hostDestination, 0o755); err != nil {
 			return command.Result{}, err
 		}
-		if err := copyTree(strings.TrimSuffix(source, string(filepath.Separator)+"."), hostDestination); err != nil {
+		copyTarget := hostDestination
+		if info, err := os.Stat(source); err == nil && info.IsDir() {
+			copyTarget = filepath.Join(hostDestination, filepath.Base(source))
+		}
+		if err := copyTree(source, copyTarget); err != nil {
 			return command.Result{}, err
 		}
 		return command.Result{ExitCode: 0}, nil
@@ -388,20 +404,28 @@ func runtimeHostPath(runtimeRoot, containerPath string) string {
 	return filepath.Join(runtimeRoot, filepath.FromSlash(trimmed))
 }
 
-func shellPathValue(command, prefix string) string {
+func shellQuotedArgsAfter(command, prefix string) []string {
 	index := strings.Index(command, prefix)
 	if index < 0 {
-		return ""
+		return nil
 	}
 	remainder := command[index+len(prefix):]
-	remainder = strings.TrimSpace(remainder)
-	if !strings.HasPrefix(remainder, "'") {
-		return ""
+	if separator := strings.Index(remainder, " && "); separator >= 0 {
+		remainder = remainder[:separator]
 	}
-	remainder = strings.TrimPrefix(remainder, "'")
-	end := strings.Index(remainder, "'")
-	if end < 0 {
-		return ""
+	paths := []string{}
+	for {
+		start := strings.Index(remainder, "'")
+		if start < 0 {
+			break
+		}
+		remainder = remainder[start+1:]
+		end := strings.Index(remainder, "'")
+		if end < 0 {
+			break
+		}
+		paths = append(paths, remainder[:end])
+		remainder = remainder[end+1:]
 	}
-	return remainder[:end]
+	return paths
 }
