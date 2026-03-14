@@ -51,7 +51,11 @@ func (r *simulatedRuntimeRunner) handleExec(args []string) (command.Result, erro
 	if len(args) < 5 {
 		return command.Result{ExitCode: 1, Stdout: "invalid exec"}, nil
 	}
-	service := args[1]
+	serviceIndex := 1
+	if len(args) >= 4 && args[1] == "-u" {
+		serviceIndex = 3
+	}
+	service := args[serviceIndex]
 	runtimeRoot := r.runtimeRoots[service]
 	if runtimeRoot == "" {
 		return command.Result{ExitCode: 1, Stdout: "unknown runtime"}, nil

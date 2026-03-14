@@ -288,7 +288,7 @@ func (m *Manager) installSkillFromGatewayState(ctx context.Context, service stri
 		shellQuote(parent),
 		shellQuote(stagingRoot),
 	)
-	resetResult, err := m.runner.Run(ctx, "", "docker", "exec", service, "sh", "-lc", command)
+	resetResult, err := m.runner.Run(ctx, "", "docker", "exec", "-u", "0", service, "sh", "-lc", command)
 	if err != nil {
 		return fmt.Errorf("reset skill destination for %s: %w", event.Skill, err)
 	}
@@ -304,8 +304,14 @@ func (m *Manager) installSkillFromGatewayState(ctx context.Context, service stri
 		return fmt.Errorf("copy skill package for %s failed: %s", event.Skill, strings.TrimSpace(copyResult.Stdout))
 	}
 
-	moveCommand := fmt.Sprintf("rm -rf %s && mv %s %s", shellQuote(destination), shellQuote(stagingPath), shellQuote(destination))
-	moveResult, err := m.runner.Run(ctx, "", "docker", "exec", service, "sh", "-lc", moveCommand)
+	moveCommand := fmt.Sprintf(
+		"rm -rf %s && mv %s %s && chown -R 1000:1000 %s",
+		shellQuote(destination),
+		shellQuote(stagingPath),
+		shellQuote(destination),
+		shellQuote(destination),
+	)
+	moveResult, err := m.runner.Run(ctx, "", "docker", "exec", "-u", "0", service, "sh", "-lc", moveCommand)
 	if err != nil {
 		return fmt.Errorf("activate skill package for %s: %w", event.Skill, err)
 	}
