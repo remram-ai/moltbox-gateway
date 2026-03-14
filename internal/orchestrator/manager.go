@@ -437,6 +437,7 @@ func (m *Manager) RenderServiceAssets(service string, definition ServiceDefiniti
 		definition.ComposeProject,
 		"up",
 		"-d",
+		"--force-recreate",
 		"--remove-orphans",
 	}
 	if definition.BuildOnDeploy {
@@ -858,8 +859,14 @@ func shellQuote(value string) string {
 func ensureCaddyTLSAssets(certsDir string) error {
 	certPath := filepath.Join(certsDir, "local.crt")
 	keyPath := filepath.Join(certsDir, "local.key")
+	requiredDNSNames := []string{
+		"moltbox-cli",
+		"moltbox-dev",
+		"moltbox-test",
+		"moltbox-prod",
+	}
 
-	if fileExists(certPath) && fileExists(keyPath) {
+	if fileExists(certPath) && fileExists(keyPath) && certificateHasDNSNames(certPath, requiredDNSNames) {
 		return nil
 	}
 	if err := os.MkdirAll(certsDir, 0o755); err != nil {
@@ -886,15 +893,11 @@ func ensureCaddyTLSAssets(certsDir string) error {
 		},
 		NotBefore:             now.Add(-1 * time.Hour),
 		NotAfter:              now.AddDate(5, 0, 0),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames: []string{
-			"moltbox-cli",
-			"moltbox-dev",
-			"moltbox-test",
-			"moltbox-prod",
-		},
+		IsCA:                  true,
+		DNSNames:             requiredDNSNames,
 	}
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, privateKey.Public(), privateKey)
@@ -916,6 +919,37 @@ func ensureCaddyTLSAssets(certsDir string) error {
 		return err
 	}
 	return nil
+}
+
+func certificateHasDNSNames(certPath string, requiredNames []string) bool {
+	pemData, err := os.ReadFile(certPath)
+	if err != nil {
+		return false
+	}
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return false
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false
+	}
+	if !certificate.IsCA {
+		return false
+	}
+	available := make(map[string]struct{}, len(certificate.DNSNames))
+	for _, name := range certificate.DNSNames {
+		available[name] = struct{}{}
+	}
+	if len(available) != len(requiredNames) {
+		return false
+	}
+	for _, name := range requiredNames {
+		if _, ok := available[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func fileExists(path string) bool {

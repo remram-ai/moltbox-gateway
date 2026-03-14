@@ -2,8 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -223,7 +227,7 @@ func TestRenderServiceAssetsForCaddyGeneratesTLSAssets(t *testing.T) {
 
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "caddy", "service.yaml"), "compose_project: caddy\ncontainer_names:\n  - caddy\nruntime_required: true\n")
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "caddy", "compose.yml.template"), "services:\n  caddy:\n    container_name: \"{{ container_name }}\"\n")
-	mustWriteFile(t, filepath.Join(runtimeRoot, "caddy", "Caddyfile.template"), "https://moltbox-dev {\n  tls /etc/caddy/certs/local.crt /etc/caddy/certs/local.key\n}\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "caddy", "Caddyfile.template"), "https://moltbox-cli {\n  tls /etc/caddy/certs/local.crt /etc/caddy/certs/local.key\n}\n")
 
 	manager := NewManager(appconfig.Config{
 		Paths: appconfig.PathsConfig{
@@ -255,6 +259,71 @@ func TestRenderServiceAssetsForCaddyGeneratesTLSAssets(t *testing.T) {
 	} {
 		if _, err := os.Stat(filepath.Join(outputDir, relative)); err != nil {
 			t.Fatalf("expected %s to exist: %v", relative, err)
+		}
+	}
+
+	caddyfileBytes, err := os.ReadFile(filepath.Join(outputDir, "config", "caddy", "Caddyfile"))
+	if err != nil {
+		t.Fatalf("read rendered caddyfile: %v", err)
+	}
+	if !strings.Contains(string(caddyfileBytes), "https://moltbox-cli") {
+		t.Fatalf("rendered caddyfile missing moltbox-cli route: %s", caddyfileBytes)
+	}
+
+	certPath := filepath.Join(outputDir, "config", "caddy", "certs", "local.crt")
+	if !certificateHasDNSNames(certPath, []string{"moltbox-cli", "moltbox-dev", "moltbox-test", "moltbox-prod"}) {
+		t.Fatalf("rendered caddy cert missing required SANs")
+	}
+}
+
+func TestRenderServiceAssetsForCaddyUsesExactCanonicalSANSet(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	runtimeRoot := filepath.Join(root, "runtime-repo")
+	stateRoot := filepath.Join(root, "state")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "caddy", "service.yaml"), "compose_project: caddy\ncontainer_names:\n  - caddy\nruntime_required: true\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "caddy", "compose.yml.template"), "services:\n  caddy:\n    container_name: \"{{ container_name }}\"\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "caddy", "Caddyfile.template"), "https://moltbox-cli {\n  tls /etc/caddy/certs/local.crt /etc/caddy/certs/local.key\n}\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, nil)
+
+	definition, err := manager.LoadServiceDefinition("caddy")
+	if err != nil {
+		t.Fatalf("LoadServiceDefinition() error = %v", err)
+	}
+
+	outputDir, _, err := manager.RenderServiceAssets("caddy", definition)
+	if err != nil {
+		t.Fatalf("RenderServiceAssets() error = %v", err)
+	}
+
+	certificate := mustParseCertificate(t, filepath.Join(outputDir, "config", "caddy", "certs", "local.crt"))
+	got := append([]string(nil), certificate.DNSNames...)
+	want := []string{"moltbox-cli", "moltbox-dev", "moltbox-test", "moltbox-prod"}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("caddy cert SANs = %v, want %v", got, want)
+	}
+	for _, unexpected := range []string{"moltbox-prime"} {
+		for _, name := range certificate.DNSNames {
+			if name == unexpected {
+				t.Fatalf("caddy cert SANs unexpectedly include %q: %v", unexpected, certificate.DNSNames)
+			}
 		}
 	}
 }
@@ -313,7 +382,7 @@ func TestDeployServiceRunsComposeAndInspectsContainers(t *testing.T) {
 	if len(runner.commands) < 2 {
 		t.Fatalf("expected docker commands, got %d", len(runner.commands))
 	}
-	if got := strings.Join(runner.commands[1], " "); !strings.Contains(got, "compose") || !strings.Contains(got, "--build") {
+	if got := strings.Join(runner.commands[1], " "); !strings.Contains(got, "compose") || !strings.Contains(got, "--build") || !strings.Contains(got, "--force-recreate") {
 		t.Fatalf("compose up command = %q, want compose build command", got)
 	}
 }
@@ -380,4 +449,22 @@ func mustWriteFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func mustParseCertificate(t *testing.T, path string) *x509.Certificate {
+	t.Helper()
+
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read cert %s: %v", path, err)
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		t.Fatalf("decode cert %s: no PEM block", path)
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse cert %s: %v", path, err)
+	}
+	return certificate
 }
