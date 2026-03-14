@@ -12,7 +12,7 @@ import (
 
 const (
 	secretScope = "service"
-	secretName  = "MCP_HTTP_TOKEN"
+	secretPrefix = "MCP_TOKEN_"
 )
 
 type Manager struct {
@@ -24,6 +24,10 @@ func NewManager(root string) *Manager {
 }
 
 func (m *Manager) Create(route *cli.Route) (cli.GatewayTokenCreateResult, error) {
+	secretName, displayName, err := secretNameForRoute(route)
+	if err != nil {
+		return cli.GatewayTokenCreateResult{}, err
+	}
 	token, err := generateToken()
 	if err != nil {
 		return cli.GatewayTokenCreateResult{}, err
@@ -34,13 +38,17 @@ func (m *Manager) Create(route *cli.Route) (cli.GatewayTokenCreateResult, error)
 	return cli.GatewayTokenCreateResult{
 		OK:      true,
 		Route:   route,
-		Name:    secretName,
+		Name:    displayName,
 		Token:   token,
 		Created: true,
 	}, nil
 }
 
 func (m *Manager) Rotate(route *cli.Route) (cli.GatewayTokenRotateResult, error) {
+	secretName, displayName, err := secretNameForRoute(route)
+	if err != nil {
+		return cli.GatewayTokenRotateResult{}, err
+	}
 	token, err := generateToken()
 	if err != nil {
 		return cli.GatewayTokenRotateResult{}, err
@@ -51,13 +59,17 @@ func (m *Manager) Rotate(route *cli.Route) (cli.GatewayTokenRotateResult, error)
 	return cli.GatewayTokenRotateResult{
 		OK:      true,
 		Route:   route,
-		Name:    secretName,
+		Name:    displayName,
 		Token:   token,
 		Rotated: true,
 	}, nil
 }
 
 func (m *Manager) Delete(route *cli.Route) (cli.GatewayTokenDeleteResult, error) {
+	secretName, displayName, err := secretNameForRoute(route)
+	if err != nil {
+		return cli.GatewayTokenDeleteResult{}, err
+	}
 	deleted, err := m.store.Delete(secretScope, secretName)
 	if err != nil {
 		return cli.GatewayTokenDeleteResult{}, err
@@ -65,7 +77,7 @@ func (m *Manager) Delete(route *cli.Route) (cli.GatewayTokenDeleteResult, error)
 	return cli.GatewayTokenDeleteResult{
 		OK:      true,
 		Route:   route,
-		Name:    secretName,
+		Name:    displayName,
 		Deleted: deleted,
 	}, nil
 }
@@ -78,30 +90,48 @@ func (m *Manager) List(route *cli.Route) (cli.GatewayTokenListResult, error) {
 	result := cli.GatewayTokenListResult{
 		OK:     true,
 		Route:  route,
-		Tokens: make([]cli.GatewayTokenInfo, 0, 1),
+		Tokens: make([]cli.GatewayTokenInfo, 0, len(names)),
 	}
 	for _, name := range names {
-		if name != secretName {
+		displayName, ok := displayNameForSecret(name)
+		if !ok {
 			continue
 		}
-		result.Tokens = append(result.Tokens, cli.GatewayTokenInfo{Name: name})
+		result.Tokens = append(result.Tokens, cli.GatewayTokenInfo{Name: displayName})
 	}
 	return result, nil
 }
 
 func (m *Manager) ValidateBearerToken(header string) (bool, error) {
-	token := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(header), "Bearer "))
-	if token == "" || !strings.HasPrefix(strings.TrimSpace(header), "Bearer ") {
+	trimmed := strings.TrimSpace(header)
+	if !strings.HasPrefix(trimmed, "Bearer ") {
 		return false, nil
 	}
-	stored, err := m.store.Get(secretScope, secretName)
+	token := strings.TrimSpace(strings.TrimPrefix(trimmed, "Bearer "))
+	if token == "" {
+		return false, nil
+	}
+
+	names, err := m.store.List(secretScope)
 	if err != nil {
-		if err == secrets.ErrSecretNotFound {
-			return false, nil
-		}
 		return false, err
 	}
-	return stored == token, nil
+	for _, name := range names {
+		if _, ok := displayNameForSecret(name); !ok {
+			continue
+		}
+		stored, err := m.store.Get(secretScope, name)
+		if err != nil {
+			if err == secrets.ErrSecretNotFound {
+				continue
+			}
+			return false, err
+		}
+		if stored == token {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func generateToken() (string, error) {
@@ -110,4 +140,38 @@ func generateToken() (string, error) {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func secretNameForRoute(route *cli.Route) (string, string, error) {
+	if route == nil {
+		return "", "", fmt.Errorf("missing token route")
+	}
+	displayName := strings.TrimSpace(route.Subject)
+	if displayName == "" {
+		return "", "", fmt.Errorf("missing token name")
+	}
+	normalized, err := normalizeTokenName(displayName)
+	if err != nil {
+		return "", "", err
+	}
+	return secretPrefix + normalized, normalized, nil
+}
+
+func displayNameForSecret(secretName string) (string, bool) {
+	if !strings.HasPrefix(secretName, secretPrefix) {
+		return "", false
+	}
+	name := strings.TrimPrefix(secretName, secretPrefix)
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+func normalizeTokenName(name string) (string, error) {
+	normalized, err := secrets.NormalizeName(name)
+	if err != nil {
+		return "", fmt.Errorf("invalid token name %q", name)
+	}
+	return normalized, nil
 }

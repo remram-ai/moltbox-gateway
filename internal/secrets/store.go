@@ -286,3 +286,7 @@ func normalizeName(name string) (string, error) {
 	}
 	return name, nil
 }
+
+func NormalizeName(name string) (string, error) {
+	return normalizeName(name)
+}

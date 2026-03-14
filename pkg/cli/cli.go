@@ -404,25 +404,54 @@ func parseGateway(args []string) ParseResult {
 			Code: ExitParseError,
 		}
 	case "token":
-		if len(args) != 3 {
+		if len(args) < 3 {
 			return ParseResult{
 				Envelope: Error(nil,
 					"parse_error",
 					"invalid gateway token command",
-					"use: gateway token create|list|delete|rotate",
+					"use: gateway token create <name> | gateway token list | gateway token delete <name> | gateway token rotate <name>",
 				),
 				Code: ExitParseError,
 			}
 		}
 		switch args[2] {
-		case "create", "list", "delete", "rotate":
+		case "list":
+			if len(args) != 3 {
+				return ParseResult{
+					Envelope: Error(nil,
+						"parse_error",
+						"unexpected arguments after 'gateway token list'",
+						"use: gateway token list",
+					),
+					Code: ExitParseError,
+				}
+			}
 			return ParseResult{
 				Route: &Route{
 					Resource: "gateway",
 					Kind:     KindGatewayToken,
 					Tokens:   append([]string(nil), args...),
 					Action:   args[2],
-					Subject:  "mcp_http_token",
+				},
+			}
+		case "create", "delete", "rotate":
+			if len(args) != 4 {
+				return ParseResult{
+					Envelope: Error(nil,
+						"parse_error",
+						fmt.Sprintf("invalid gateway token %s command", args[2]),
+						fmt.Sprintf("use: gateway token %s <name>", args[2]),
+					),
+					Code: ExitParseError,
+				}
+			}
+			return ParseResult{
+				Route: &Route{
+					Resource: "gateway",
+					Kind:     KindGatewayToken,
+					Tokens:   append([]string(nil), args...),
+					Action:   args[2],
+					Subject:  args[3],
 				},
 			}
 		default:
@@ -430,7 +459,7 @@ func parseGateway(args []string) ParseResult {
 				Envelope: Error(nil,
 					"parse_error",
 					fmt.Sprintf("unknown gateway token action '%s'", args[2]),
-					"use: gateway token create|list|delete|rotate",
+					"use: gateway token create <name> | gateway token list | gateway token delete <name> | gateway token rotate <name>",
 				),
 				Code: ExitParseError,
 			}
@@ -696,10 +725,10 @@ Resources:
     update
     logs
     mcp-stdio
-    token create
+    token create <name>
     token list
-    token delete
-    token rotate
+    token delete <name>
+    token rotate <name>
     service deploy <service>
     service restart <service>
     service status <service>

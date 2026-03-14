@@ -10,7 +10,7 @@ func TestManagerLifecycleAndValidation(t *testing.T) {
 	t.Parallel()
 
 	manager := NewManager(t.TempDir())
-	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Subject: "mcp_http_token"}
+	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Subject: "test-agent"}
 
 	listBefore, err := manager.List(route)
 	if err != nil {
@@ -40,8 +40,8 @@ func TestManagerLifecycleAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() after create error = %v", err)
 	}
-	if len(listAfter.Tokens) != 1 || listAfter.Tokens[0].Name != secretName {
-		t.Fatalf("tokens after create = %v, want singleton %q", listAfter.Tokens, secretName)
+	if len(listAfter.Tokens) != 1 || listAfter.Tokens[0].Name != "test-agent" {
+		t.Fatalf("tokens after create = %v, want singleton %q", listAfter.Tokens, "test-agent")
 	}
 
 	rotated, err := manager.Rotate(route)

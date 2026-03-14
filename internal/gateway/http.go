@@ -363,7 +363,14 @@ func (s *Server) handleTokenCreate(writer http.ResponseWriter, request *http.Req
 		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /token/create"))
 		return
 	}
-	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Action: "create", Subject: "mcp_http_token"}
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the named token route")
+	if !ok {
+		return
+	}
+	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Action: "create"}
+	if payload.Route != nil {
+		route = payload.Route
+	}
 	result, err := s.tokenManager.Create(route)
 	if err != nil {
 		s.writeJSON(writer, http.StatusBadGateway, cli.Error(route, "token_create_failed", "failed to create MCP token", err.Error()))
@@ -377,7 +384,7 @@ func (s *Server) handleTokenList(writer http.ResponseWriter, request *http.Reque
 		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use GET /token/list"))
 		return
 	}
-	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Action: "list", Subject: "mcp_http_token"}
+	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Action: "list"}
 	result, err := s.tokenManager.List(route)
 	if err != nil {
 		s.writeJSON(writer, http.StatusBadGateway, cli.Error(route, "token_list_failed", "failed to list MCP tokens", err.Error()))
@@ -391,7 +398,14 @@ func (s *Server) handleTokenDelete(writer http.ResponseWriter, request *http.Req
 		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /token/delete"))
 		return
 	}
-	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Action: "delete", Subject: "mcp_http_token"}
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the named token route")
+	if !ok {
+		return
+	}
+	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Action: "delete"}
+	if payload.Route != nil {
+		route = payload.Route
+	}
 	result, err := s.tokenManager.Delete(route)
 	if err != nil {
 		s.writeJSON(writer, http.StatusBadGateway, cli.Error(route, "token_delete_failed", "failed to delete MCP token", err.Error()))
@@ -405,7 +419,14 @@ func (s *Server) handleTokenRotate(writer http.ResponseWriter, request *http.Req
 		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /token/rotate"))
 		return
 	}
-	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Action: "rotate", Subject: "mcp_http_token"}
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the named token route")
+	if !ok {
+		return
+	}
+	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Action: "rotate"}
+	if payload.Route != nil {
+		route = payload.Route
+	}
 	result, err := s.tokenManager.Rotate(route)
 	if err != nil {
 		s.writeJSON(writer, http.StatusBadGateway, cli.Error(route, "token_rotate_failed", "failed to rotate MCP token", err.Error()))
