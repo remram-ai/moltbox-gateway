@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -19,6 +20,8 @@ type Config struct {
 	AppConfig        appconfig.Config
 	DockerSocketPath string
 	Runner           command.Runner
+	logger           *slog.Logger
+	mcpAuthLimiter   *mcpAuthLimiter
 }
 
 type Server struct {
@@ -30,6 +33,8 @@ type Server struct {
 	secretHandler    *secrets.Handler
 	tokenManager     *tokens.Manager
 	mcpServer        *mcpstdio.Server
+	logger           *slog.Logger
+	mcpAuthLimiter   *mcpAuthLimiter
 }
 
 func NewServer(config Config) *Server {
@@ -76,6 +81,14 @@ func NewServer(config Config) *Server {
 	secretHandler := secrets.NewHandler(appCfg.Paths.SecretsRoot)
 	tokenManager := tokens.NewManager(appCfg.Paths.SecretsRoot)
 	executor := localexec.New(appconfig.ConfigPath(), "http://127.0.0.1:7460")
+	logger := config.logger
+	if logger == nil {
+		logger = defaultLogger()
+	}
+	authLimiter := config.mcpAuthLimiter
+	if authLimiter == nil {
+		authLimiter = newMCPAuthLimiter()
+	}
 
 	return &Server{
 		listenAddress:    listenAddress,
@@ -86,6 +99,8 @@ func NewServer(config Config) *Server {
 		secretHandler:    secretHandler,
 		tokenManager:     tokenManager,
 		mcpServer:        mcpstdio.New(executor),
+		logger:           logger,
+		mcpAuthLimiter:   authLimiter,
 	}
 }
 

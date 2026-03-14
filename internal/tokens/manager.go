@@ -2,25 +2,46 @@ package tokens
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/remram-ai/moltbox-gateway/internal/secrets"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
 
 const (
-	secretScope = "service"
+	secretScope  = "service"
 	secretPrefix = "MCP_TOKEN_"
 )
 
+type ValidationResult struct {
+	Authorized bool
+	Name       string
+}
+
+type cachedToken struct {
+	Name   string
+	Digest [sha256.Size]byte
+}
+
 type Manager struct {
 	store *secrets.Store
+
+	mu          sync.RWMutex
+	cache       map[string]cachedToken
+	cacheLoaded bool
 }
 
 func NewManager(root string) *Manager {
-	return &Manager{store: secrets.NewStore(root)}
+	return &Manager{
+		store: secrets.NewStore(root),
+		cache: make(map[string]cachedToken),
+	}
 }
 
 func (m *Manager) Create(route *cli.Route) (cli.GatewayTokenCreateResult, error) {
@@ -35,6 +56,7 @@ func (m *Manager) Create(route *cli.Route) (cli.GatewayTokenCreateResult, error)
 	if err := m.store.Set(secretScope, secretName, token); err != nil {
 		return cli.GatewayTokenCreateResult{}, err
 	}
+	m.putCachedToken(displayName, token)
 	return cli.GatewayTokenCreateResult{
 		OK:      true,
 		Route:   route,
@@ -56,6 +78,7 @@ func (m *Manager) Rotate(route *cli.Route) (cli.GatewayTokenRotateResult, error)
 	if err := m.store.Set(secretScope, secretName, token); err != nil {
 		return cli.GatewayTokenRotateResult{}, err
 	}
+	m.putCachedToken(displayName, token)
 	return cli.GatewayTokenRotateResult{
 		OK:      true,
 		Route:   route,
@@ -74,6 +97,7 @@ func (m *Manager) Delete(route *cli.Route) (cli.GatewayTokenDeleteResult, error)
 	if err != nil {
 		return cli.GatewayTokenDeleteResult{}, err
 	}
+	m.deleteCachedToken(displayName)
 	return cli.GatewayTokenDeleteResult{
 		OK:      true,
 		Route:   route,
@@ -83,55 +107,137 @@ func (m *Manager) Delete(route *cli.Route) (cli.GatewayTokenDeleteResult, error)
 }
 
 func (m *Manager) List(route *cli.Route) (cli.GatewayTokenListResult, error) {
-	names, err := m.store.List(secretScope)
+	entries, err := m.cachedTokens()
 	if err != nil {
 		return cli.GatewayTokenListResult{}, err
 	}
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
 	result := cli.GatewayTokenListResult{
 		OK:     true,
 		Route:  route,
 		Tokens: make([]cli.GatewayTokenInfo, 0, len(names)),
 	}
 	for _, name := range names {
-		displayName, ok := displayNameForSecret(name)
-		if !ok {
-			continue
-		}
-		result.Tokens = append(result.Tokens, cli.GatewayTokenInfo{Name: displayName})
+		result.Tokens = append(result.Tokens, cli.GatewayTokenInfo{Name: name})
 	}
 	return result, nil
 }
 
-func (m *Manager) ValidateBearerToken(header string) (bool, error) {
-	trimmed := strings.TrimSpace(header)
-	if !strings.HasPrefix(trimmed, "Bearer ") {
-		return false, nil
-	}
-	token := strings.TrimSpace(strings.TrimPrefix(trimmed, "Bearer "))
-	if token == "" {
-		return false, nil
+func (m *Manager) ValidateBearerToken(header string) (ValidationResult, error) {
+	token, ok := bearerToken(header)
+	if !ok {
+		return ValidationResult{}, nil
 	}
 
+	candidateDigest := digestToken(token)
+	entries, err := m.cachedTokens()
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	for _, entry := range entries {
+		if subtle.ConstantTimeCompare(entry.Digest[:], candidateDigest[:]) == 1 {
+			return ValidationResult{Authorized: true, Name: entry.Name}, nil
+		}
+	}
+	return ValidationResult{}, nil
+}
+
+func (m *Manager) cachedTokens() (map[string]cachedToken, error) {
+	m.mu.RLock()
+	if m.cacheLoaded {
+		snapshot := cloneCache(m.cache)
+		m.mu.RUnlock()
+		return snapshot, nil
+	}
+	m.mu.RUnlock()
+
+	loaded, err := m.loadCache()
+	if err != nil {
+		return nil, err
+	}
+	return loaded, nil
+}
+
+func (m *Manager) loadCache() (map[string]cachedToken, error) {
 	names, err := m.store.List(secretScope)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	for _, name := range names {
-		if _, ok := displayNameForSecret(name); !ok {
+
+	loaded := make(map[string]cachedToken, len(names))
+	for _, secretName := range names {
+		displayName, ok := displayNameForSecret(secretName)
+		if !ok {
 			continue
 		}
-		stored, err := m.store.Get(secretScope, name)
+		stored, err := m.store.Get(secretScope, secretName)
 		if err != nil {
 			if err == secrets.ErrSecretNotFound {
 				continue
 			}
-			return false, err
+			return nil, err
 		}
-		if stored == token {
-			return true, nil
+		loaded[displayName] = cachedToken{
+			Name:   displayName,
+			Digest: digestToken(stored),
 		}
 	}
-	return false, nil
+
+	m.mu.Lock()
+	m.cache = loaded
+	m.cacheLoaded = true
+	snapshot := cloneCache(m.cache)
+	m.mu.Unlock()
+	return snapshot, nil
+}
+
+func (m *Manager) putCachedToken(name, token string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cache == nil {
+		m.cache = make(map[string]cachedToken)
+	}
+	m.cache[name] = cachedToken{Name: name, Digest: digestToken(token)}
+	m.cacheLoaded = true
+}
+
+func (m *Manager) deleteCachedToken(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cache == nil {
+		m.cache = make(map[string]cachedToken)
+	}
+	delete(m.cache, name)
+	m.cacheLoaded = true
+}
+
+func cloneCache(source map[string]cachedToken) map[string]cachedToken {
+	cloned := make(map[string]cachedToken, len(source))
+	for name, entry := range source {
+		cloned[name] = entry
+	}
+	return cloned
+}
+
+func digestToken(token string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(token))
+}
+
+func bearerToken(header string) (string, bool) {
+	trimmed := strings.TrimSpace(header)
+	if !strings.HasPrefix(trimmed, "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(trimmed, "Bearer "))
+	if token == "" {
+		return "", false
+	}
+	return token, true
 }
 
 func generateToken() (string, error) {

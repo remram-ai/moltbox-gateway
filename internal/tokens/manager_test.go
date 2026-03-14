@@ -32,8 +32,8 @@ func TestManagerLifecycleAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateBearerToken() error = %v", err)
 	}
-	if !valid {
-		t.Fatal("ValidateBearerToken() = false, want true")
+	if !valid.Authorized || valid.Name != "test-agent" {
+		t.Fatalf("ValidateBearerToken() = %#v, want authorized test-agent", valid)
 	}
 
 	listAfter, err := manager.List(route)
@@ -56,8 +56,8 @@ func TestManagerLifecycleAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateBearerToken(rotated) error = %v", err)
 	}
-	if !valid {
-		t.Fatal("ValidateBearerToken(rotated) = false, want true")
+	if !valid.Authorized || valid.Name != "test-agent" {
+		t.Fatalf("ValidateBearerToken(rotated) = %#v, want authorized test-agent", valid)
 	}
 
 	deleted, err := manager.Delete(route)
@@ -72,7 +72,38 @@ func TestManagerLifecycleAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateBearerToken(after delete) error = %v", err)
 	}
-	if valid {
-		t.Fatal("ValidateBearerToken(after delete) = true, want false")
+	if valid.Authorized {
+		t.Fatalf("ValidateBearerToken(after delete) = %#v, want unauthorized", valid)
+	}
+}
+
+func TestValidateBearerTokenIgnoresNonMCPSecrets(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager(t.TempDir())
+	if err := manager.store.Set(secretScope, "POSTGRES_PASSWORD", "not-a-token"); err != nil {
+		t.Fatalf("store.Set(non-token) error = %v", err)
+	}
+
+	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayToken, Subject: "alpha"}
+	created, err := manager.Create(route)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	valid, err := manager.ValidateBearerToken("Bearer " + created.Token)
+	if err != nil {
+		t.Fatalf("ValidateBearerToken() error = %v", err)
+	}
+	if !valid.Authorized || valid.Name != "alpha" {
+		t.Fatalf("ValidateBearerToken() = %#v, want authorized alpha", valid)
+	}
+
+	listed, err := manager.List(route)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed.Tokens) != 1 || listed.Tokens[0].Name != "alpha" {
+		t.Fatalf("List() = %#v, want only MCP token alpha", listed.Tokens)
 	}
 }

@@ -436,15 +436,24 @@ func (s *Server) handleTokenRotate(writer http.ResponseWriter, request *http.Req
 }
 
 func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
-	authorized, err := s.tokenManager.ValidateBearerToken(request.Header.Get("Authorization"))
+	result, err := s.tokenManager.ValidateBearerToken(request.Header.Get("Authorization"))
 	if err != nil {
+		s.logMCPAuth(request, "", false, "validation_error")
 		s.writeJSON(writer, http.StatusUnauthorized, cli.Error(nil, "unauthorized", "failed to validate MCP token", err.Error()))
 		return
 	}
-	if !authorized {
+	if !result.Authorized {
+		if s.mcpAuthLimiter.RecordFailure(request.RemoteAddr) {
+			s.logMCPAuth(request, "", false, "rate_limited")
+			s.writeJSON(writer, http.StatusTooManyRequests, cli.Error(nil, "rate_limited", "too many failed MCP authentication attempts", "wait and retry with a valid bearer token"))
+			return
+		}
+		s.logMCPAuth(request, "", false, "invalid_token")
 		s.writeJSON(writer, http.StatusUnauthorized, cli.Error(nil, "unauthorized", "missing or invalid MCP token", "send Authorization: Bearer <token>"))
 		return
 	}
+	s.mcpAuthLimiter.RecordSuccess(request.RemoteAddr)
+	s.logMCPAuth(request, result.Name, true, "authorized")
 	if request.Method != http.MethodPost {
 		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /mcp"))
 		return
@@ -475,6 +484,23 @@ func (s *Server) handleMCP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(writer).Encode(response)
+}
+
+func (s *Server) logMCPAuth(request *http.Request, tokenName string, authorized bool, reason string) {
+	if s.logger == nil {
+		return
+	}
+	attrs := []any{
+		"token_name", tokenName,
+		"success", authorized,
+		"remote_address", authRemoteKey(request.RemoteAddr),
+		"reason", reason,
+	}
+	if authorized {
+		s.logger.Info("mcp auth", attrs...)
+		return
+	}
+	s.logger.Warn("mcp auth", attrs...)
 }
 
 func (s *Server) handleRuntimeReload(writer http.ResponseWriter, request *http.Request) {
