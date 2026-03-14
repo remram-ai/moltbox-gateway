@@ -68,8 +68,9 @@ type Envelope struct {
 }
 
 type RouteRequest struct {
-	Route   *Route `json:"route,omitempty"`
-	Service string `json:"service,omitempty"`
+	Route       *Route `json:"route,omitempty"`
+	Service     string `json:"service,omitempty"`
+	SecretValue string `json:"secret_value,omitempty"`
 }
 
 type SecretSetRequest struct {
@@ -586,23 +587,37 @@ func parseScopedSecrets(scope string, args []string) ParseResult {
 			},
 		}
 	case "set", "delete":
-		if len(args) != 4 {
+		maxArgs := 4
+		if args[2] == "set" {
+			maxArgs = 5
+		}
+		if len(args) < 4 || len(args) > maxArgs {
 			return ParseResult{
 				Envelope: Error(nil,
 					"parse_error",
 					fmt.Sprintf("invalid %s secrets %s command", scope, args[2]),
-					fmt.Sprintf("use: %s secrets %s <NAME>", scope, args[2]),
+					func() string {
+						if args[2] == "set" {
+							return fmt.Sprintf("use: %s secrets set <NAME> [VALUE]", scope)
+						}
+						return fmt.Sprintf("use: %s secrets delete <NAME>", scope)
+					}(),
 				),
 				Code: ExitParseError,
 			}
 		}
+		nativeArgs := []string(nil)
+		if args[2] == "set" && len(args) == 5 {
+			nativeArgs = []string{args[4]}
+		}
 		return ParseResult{
 			Route: &Route{
-				Resource: scope,
-				Kind:     KindScopedSecrets,
-				Tokens:   append([]string(nil), args...),
-				Action:   args[2],
-				Subject:  args[3],
+				Resource:   scope,
+				Kind:       KindScopedSecrets,
+				Tokens:     append([]string(nil), args...),
+				Action:     args[2],
+				Subject:    args[3],
+				NativeArgs: nativeArgs,
 			},
 		}
 	default:
@@ -739,12 +754,12 @@ Resources:
     reload
     checkpoint
     openclaw <command>
-    secrets set <name>
+    secrets set <name> [value]
     secrets list
     secrets delete <name>
 
   service
-    secrets set <name>
+    secrets set <name> [value]
     secrets list
     secrets delete <name>
 

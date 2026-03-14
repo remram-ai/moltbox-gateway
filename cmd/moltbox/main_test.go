@@ -5,8 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +239,61 @@ func TestCLIForwardsToGateway(t *testing.T) {
 				})
 			},
 		},
+		{
+			name:       "scoped secrets list",
+			args:       []string{"dev", "secrets", "list"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/execute",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if payload.Route == nil || payload.Route.Kind != cli.KindScopedSecrets || payload.Route.Resource != "dev" || payload.Route.Action != "list" {
+					t.Fatalf("payload.route = %#v, want dev scoped secrets list route", payload.Route)
+				}
+				if payload.SecretValue != "" {
+					t.Fatalf("payload.secret_value = %q, want empty", payload.SecretValue)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.SecretListResult{
+					OK:    true,
+					Route: payload.Route,
+					Scope: "dev",
+					Secrets: []cli.SecretListItem{
+						{Scope: "dev", Name: "TOGETHER_API_KEY"},
+					},
+				})
+			},
+		},
+		{
+			name:       "scoped secrets set inline value",
+			args:       []string{"dev", "secrets", "set", "TOGETHER_API_KEY", "inline-secret"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/execute",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if payload.Route == nil || payload.Route.Kind != cli.KindScopedSecrets || payload.Route.Action != "set" {
+					t.Fatalf("payload.route = %#v, want scoped secrets set route", payload.Route)
+				}
+				if payload.SecretValue != "inline-secret" {
+					t.Fatalf("payload.secret_value = %q, want inline-secret", payload.SecretValue)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.SecretSetResult{
+					OK:     true,
+					Route:  payload.Route,
+					Scope:  "dev",
+					Name:   "TOGETHER_API_KEY",
+					Stored: true,
+				})
+			},
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -363,48 +416,40 @@ func TestHelpAndVersion(t *testing.T) {
 	}
 }
 
-func TestScopedSecretsCommandsRunLocally(t *testing.T) {
-	root := t.TempDir()
-	configPath := filepath.Join(root, "config.yaml")
-	secretsRoot := filepath.Join(root, "secrets")
-	if err := os.WriteFile(configPath, []byte(
-		"paths:\n"+
-			"  state_root: /tmp/state\n"+
-			"  runtime_root: /tmp/runtime\n"+
-			"  logs_root: /tmp/logs\n"+
-			"  secrets_root: "+strings.ReplaceAll(secretsRoot, "\\", "/")+"\n"+
-			"gateway:\n"+
-			"  host: 127.0.0.1\n"+
-			"  port: 7460\n",
-	), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+func TestScopedSecretsCommandsUseGatewayForSecretValue(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", request.Method)
+		}
+		if request.URL.Path != "/execute" {
+			t.Fatalf("path = %s, want /execute", request.URL.Path)
+		}
 
-	t.Setenv("MOLTBOX_CONFIG_PATH", configPath)
-	t.Setenv("MOLTBOX_SECRET_VALUE", "local-secret")
-	t.Setenv("MOLTBOX_GATEWAY_URL", "http://127.0.0.1:1")
+		var payload cli.RouteRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.SecretValue != "stdin-secret" {
+			t.Fatalf("payload.secret_value = %q, want stdin-secret", payload.SecretValue)
+		}
 
-	var setOutput strings.Builder
-	if code := run([]string{"dev", "secrets", "set", "TOGETHER_API_KEY"}, &setOutput, ioDiscard{}); code != cli.ExitOK {
+		_ = json.NewEncoder(writer).Encode(cli.SecretSetResult{
+			OK:     true,
+			Route:  payload.Route,
+			Scope:  "dev",
+			Name:   "TOGETHER_API_KEY",
+			Stored: true,
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("MOLTBOX_GATEWAY_URL", server.URL)
+	t.Setenv("MOLTBOX_SECRET_VALUE", "stdin-secret")
+
+	var output strings.Builder
+	code := run([]string{"dev", "secrets", "set", "TOGETHER_API_KEY"}, &output, ioDiscard{})
+	if code != cli.ExitOK {
 		t.Fatalf("set exit code = %d, want %d", code, cli.ExitOK)
-	}
-
-	var listOutput strings.Builder
-	if code := run([]string{"dev", "secrets", "list"}, &listOutput, ioDiscard{}); code != cli.ExitOK {
-		t.Fatalf("list exit code = %d, want %d", code, cli.ExitOK)
-	}
-
-	var listPayload cli.SecretListResult
-	if err := json.Unmarshal([]byte(listOutput.String()), &listPayload); err != nil {
-		t.Fatalf("decode list payload: %v", err)
-	}
-	if len(listPayload.Secrets) != 1 || listPayload.Secrets[0].Name != "TOGETHER_API_KEY" || listPayload.Secrets[0].Scope != "dev" {
-		t.Fatalf("list payload = %#v, want dev/TOGETHER_API_KEY", listPayload.Secrets)
-	}
-
-	var deleteOutput strings.Builder
-	if code := run([]string{"dev", "secrets", "delete", "TOGETHER_API_KEY"}, &deleteOutput, ioDiscard{}); code != cli.ExitOK {
-		t.Fatalf("delete exit code = %d, want %d", code, cli.ExitOK)
 	}
 }
 

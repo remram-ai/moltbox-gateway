@@ -27,7 +27,7 @@ func NewHTTPClient(baseURL string) *HTTPClient {
 	}
 }
 
-func (c *HTTPClient) Execute(route *cli.Route) ([]byte, error) {
+func (c *HTTPClient) Execute(route *cli.Route, secretValue string) ([]byte, error) {
 	switch {
 	case route.Kind == cli.KindGateway && route.Action == "status":
 		return c.get("/status")
@@ -64,7 +64,7 @@ func (c *HTTPClient) Execute(route *cli.Route) ([]byte, error) {
 	case route.Kind == cli.KindServiceNative:
 		return c.post("/service/passthrough", cli.RouteRequest{Route: route})
 	default:
-		return c.post("/execute", cli.RouteRequest{Route: route})
+		return c.post("/execute", cli.RouteRequest{Route: route, SecretValue: secretValue})
 	}
 }
 

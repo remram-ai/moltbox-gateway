@@ -32,16 +32,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	secretValue := ""
 	if result.Route != nil && result.Route.Kind == cli.KindScopedSecrets {
 		if result.Route.Action == "set" {
-			var err error
-			secretValue, err = loadSecretValue(os.Stdin)
-			if err != nil {
-				_ = cli.WriteJSON(stdout, cli.Error(
-					result.Route,
-					"secret_input_missing",
-					"failed to read secret input",
-					err.Error(),
-				))
-				return cli.ExitFailure
+			if len(result.Route.NativeArgs) > 0 {
+				secretValue = result.Route.NativeArgs[0]
+			} else {
+				var err error
+				secretValue, err = loadSecretValue(os.Stdin)
+				if err != nil {
+					_ = cli.WriteJSON(stdout, cli.Error(
+						result.Route,
+						"secret_input_missing",
+						"failed to read secret input",
+						err.Error(),
+					))
+					return cli.ExitFailure
+				}
 			}
 		}
 	}

@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/remram-ai/moltbox-gateway/internal/client"
-	appconfig "github.com/remram-ai/moltbox-gateway/internal/config"
-	"github.com/remram-ai/moltbox-gateway/internal/secrets"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
 
@@ -42,29 +40,7 @@ func (r *Runner) ExecuteParse(result cli.ParseResult, secretValue string) ([]byt
 		return payload, cli.ExitParseError, err
 	}
 
-	if result.Route.Kind == cli.KindScopedSecrets {
-		cfg, err := appconfig.Load(r.configPath)
-		if err != nil {
-			payload, marshalErr := marshal(cli.Error(
-				result.Route,
-				"config_load_failed",
-				fmt.Sprintf("failed to load gateway config from %s", r.configPath),
-				err.Error(),
-			))
-			if marshalErr != nil {
-				return nil, cli.ExitFailure, marshalErr
-			}
-			return payload, cli.ExitFailure, nil
-		}
-
-		payload, err := marshal(secrets.NewHandler(cfg.Paths.SecretsRoot).Execute(result.Route, secretValue))
-		if err != nil {
-			return nil, cli.ExitFailure, err
-		}
-		return payload, cli.ExitCodeFromPayload(payload), nil
-	}
-
-	payload, err := client.NewHTTPClient(r.gatewayURL).Execute(result.Route)
+	payload, err := client.NewHTTPClient(r.gatewayURL).Execute(result.Route, secretValue)
 	if err != nil {
 		payload, marshalErr := marshal(cli.Error(
 			result.Route,

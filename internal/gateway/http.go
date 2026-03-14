@@ -612,7 +612,16 @@ func (s *Server) handleExecute(writer http.ResponseWriter, request *http.Request
 	switch payload.Route.Resource {
 	case "gateway":
 		response = Payload(payload.Route)
-	case "dev", "test", "prod":
+	case "dev", "test", "prod", "service":
+		if payload.Route.Kind == cli.KindScopedSecrets {
+			s.logScopedSecretsRequest(request, payload.Route)
+			response = s.secretHandler.Execute(payload.Route, payload.SecretValue)
+			break
+		}
+		if payload.Route.Resource == "service" {
+			response = cli.Error(payload.Route, "parse_error", "unsupported route", "use a documented command")
+			break
+		}
 		response = runtime.Payload(payload.Route)
 	case "ollama", "opensearch", "caddy":
 		response = services.Payload(payload.Route)
@@ -621,6 +630,19 @@ func (s *Server) handleExecute(writer http.ResponseWriter, request *http.Request
 	}
 
 	s.writeJSON(writer, http.StatusOK, response)
+}
+
+func (s *Server) logScopedSecretsRequest(request *http.Request, route *cli.Route) {
+	if s.logger == nil || route == nil {
+		return
+	}
+	s.logger.Info(
+		"scoped secrets request",
+		"scope", route.Resource,
+		"action", route.Action,
+		"name", route.Subject,
+		"remote_address", authRemoteKey(request.RemoteAddr),
+	)
 }
 
 func (s *Server) writeJSON(writer http.ResponseWriter, status int, payload any) {
