@@ -609,7 +609,7 @@ func TestRuntimePluginInstallRecordsReplayStateAndReplaysOnRedeploy(t *testing.T
 	if err != nil {
 		t.Fatalf("RuntimePluginInstall() error = %v", err)
 	}
-	if !result.OK || result.Plugin != "semantic-router" || result.Package != "semantic-router@1.2.0" {
+	if !result.OK || result.Plugin != "semantic-router" || result.Package != "semantic-router" || result.Source != runtimePluginSourceGit {
 		t.Fatalf("install result = %#v, want semantic-router install", result)
 	}
 
@@ -620,16 +620,29 @@ func TestRuntimePluginInstallRecordsReplayStateAndReplaysOnRedeploy(t *testing.T
 	if len(log.Events) != 1 || log.Events[0].Type != "plugin_install" || log.Events[0].Plugin != "semantic-router" {
 		t.Fatalf("replay log = %#v, want one semantic-router plugin event", log.Events)
 	}
+	if log.Events[0].Source != runtimePluginSourceGit {
+		t.Fatalf("replay event source = %q, want %q", log.Events[0].Source, runtimePluginSourceGit)
+	}
+	if log.Events[0].PackageDir == "" || log.Events[0].PackageDigest == "" {
+		t.Fatalf("replay event = %#v, want staged package metadata", log.Events[0])
+	}
 	if _, err := os.Stat(filepath.Join(runtimeRoot, "extensions", "semantic-router", "openclaw.plugin.json")); err != nil {
 		t.Fatalf("expected semantic-router plugin in runtime state: %v", err)
 	}
 
+	foundStagedInstall := false
 	foundRestart := false
 	for _, command := range runner.commands {
-		if strings.Join(command, " ") == "docker restart openclaw-dev" {
-			foundRestart = true
-			break
+		text := strings.Join(command, " ")
+		if strings.Contains(text, "openclaw plugins install") && strings.Contains(text, "/home/node/.openclaw/.moltbox-plugin-source/") {
+			foundStagedInstall = true
 		}
+		if text == "docker restart openclaw-dev" {
+			foundRestart = true
+		}
+	}
+	if !foundStagedInstall {
+		t.Fatalf("expected plugin install to use staged package path, got commands %#v", runner.commands)
 	}
 	if !foundRestart {
 		t.Fatalf("expected plugin replay to restart the runtime, got commands %#v", runner.commands)
@@ -711,6 +724,9 @@ func TestRuntimePluginCheckpointPromotesBaselineAndClearsReplay(t *testing.T) {
 	}
 	if !ok || len(checkpoint.Plugins) != 1 || checkpoint.Plugins[0].Name != "semantic-router" {
 		t.Fatalf("checkpoint plugins = %#v, want semantic-router baseline", checkpoint.Plugins)
+	}
+	if checkpoint.Plugins[0].Source != runtimePluginSourceGit || checkpoint.Plugins[0].Package != "semantic-router" {
+		t.Fatalf("checkpoint plugins = %#v, want git-backed semantic-router metadata", checkpoint.Plugins)
 	}
 
 	log, err := store.LoadReplayLog("openclaw-dev")
@@ -796,6 +812,18 @@ func TestRuntimePluginInstallIsIdempotentAgainstBaseline(t *testing.T) {
 	}
 }
 
+func TestRuntimePluginInstallRejectsUnknownBarePlugin(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _, _, _ := newRuntimeTestManager(t)
+
+	installRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "install", Environment: "dev", Runtime: "openclaw-dev", Subject: "missing-plugin"}
+	_, err := manager.RuntimePluginInstall(context.Background(), installRoute)
+	if err == nil || !strings.Contains(err.Error(), "unknown deployable plugin") {
+		t.Fatalf("RuntimePluginInstall() error = %v, want unknown deployable plugin", err)
+	}
+}
+
 func TestRuntimeReplayInstallsPluginsBeforeSkills(t *testing.T) {
 	t.Parallel()
 
@@ -826,7 +854,7 @@ func TestRuntimeReplayInstallsPluginsBeforeSkills(t *testing.T) {
 		if pluginInstallIndex < 0 && strings.Contains(text, "openclaw plugins install") {
 			pluginInstallIndex = index
 		}
-		if skillReplayIndex < 0 && strings.Contains(text, filepath.Join("deploy", "runtime", "openclaw-dev", "packages")) {
+		if skillReplayIndex < 0 && strings.Contains(text, "/home/node/.openclaw/skills/together-escalation") {
 			skillReplayIndex = index
 		}
 	}
