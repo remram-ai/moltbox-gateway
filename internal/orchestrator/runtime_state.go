@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	stdruntime "runtime"
 	"sort"
@@ -18,6 +19,9 @@ import (
 const defaultRuntimeImage = "ghcr.io/openclaw/openclaw:latest"
 
 const (
+	defaultOpenClawStateRoot = "/home/node/.openclaw"
+	openClawConfigEnvName    = "OPENCLAW_CONFIG_DIR"
+	pluginPackBuilderImage   = "node:20-bookworm"
 	runtimePluginSourceGit   = "git"
 	runtimePluginSourceLocal = "local"
 	runtimePluginSourceNPM   = "npm"
@@ -57,6 +61,14 @@ type runtimePluginManifest struct {
 type runtimePluginPackage struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
+}
+
+type runtimeOpenClawConfig struct {
+	Agents struct {
+		Defaults struct {
+			Workspace string `json:"workspace"`
+		} `json:"defaults"`
+	} `json:"agents"`
 }
 
 func isRuntimeService(service string) bool {
@@ -140,6 +152,7 @@ func (m *Manager) RuntimeSkillDeploy(ctx context.Context, route *cli.Route) (cli
 	if err != nil {
 		return cli.RuntimeSkillResult{}, err
 	}
+	stateRoot := m.runtimeOpenClawStateRoot(ctx, service)
 
 	event := deploystate.ReplayEvent{
 		EventID:       eventID,
@@ -150,7 +163,7 @@ func (m *Manager) RuntimeSkillDeploy(ctx context.Context, route *cli.Route) (cli
 		Skill:         canonicalSkill,
 		PackageDir:    stagedDir,
 		PackageDigest: skill.Digest,
-		ContainerPath: filepath.ToSlash(filepath.Join("/home/node/.openclaw/skills", canonicalSkill)),
+		ContainerPath: path.Join(stateRoot, "skills", canonicalSkill),
 		Details: map[string]string{
 			"requested_skill": strings.TrimSpace(route.Subject),
 		},
@@ -290,13 +303,18 @@ func (m *Manager) RuntimePluginInstall(ctx context.Context, route *cli.Route) (c
 		restoreRuntime()
 		return cli.RuntimePluginResult{}, err
 	}
+	installSourcePath, err := m.prepareRuntimePluginPackage(ctx, packageDir)
+	if err != nil {
+		restoreRuntime()
+		return cli.RuntimePluginResult{}, err
+	}
 	packageDigest, err := m.stateStore.DirectoryDigest(packageDir)
 	if err != nil {
 		restoreRuntime()
 		return cli.RuntimePluginResult{}, err
 	}
 
-	installedPlugin, err := m.installRuntimePlugin(ctx, service, eventID, requested, plugin, source, packageDir, beforePlugins)
+	installedPlugin, err := m.installRuntimePlugin(ctx, service, eventID, requested, plugin, source, packageDir, installSourcePath, beforePlugins)
 	if err != nil {
 		restoreRuntime()
 		return cli.RuntimePluginResult{}, err
@@ -717,11 +735,11 @@ func (m *Manager) installSkillFromGatewayState(ctx context.Context, service stri
 
 	destination := strings.TrimSpace(event.ContainerPath)
 	if destination == "" {
-		destination = filepath.ToSlash(filepath.Join("/home/node/.openclaw/skills", event.Skill))
+		destination = path.Join(m.runtimeOpenClawStateRoot(ctx, service), "skills", event.Skill)
 	}
-	parent := filepath.ToSlash(filepath.Dir(destination))
-	stagingRoot := "/home/node/.openclaw/.moltbox-replay"
-	stagingPath := filepath.ToSlash(filepath.Join(stagingRoot, event.EventID))
+	parent := path.Dir(destination)
+	stagingRoot := path.Join("/tmp/moltbox-skill-replay", event.EventID)
+	stagingPath := path.Join(stagingRoot, filepath.Base(event.PackageDir))
 	command := fmt.Sprintf(
 		"rm -rf %s %s && mkdir -p %s %s",
 		shellQuote(destination),
@@ -1135,7 +1153,8 @@ func (m *Manager) captureRuntimeState(ctx context.Context, service, snapshotDir 
 		return fmt.Errorf("create checkpoint snapshot dir for %s: %w", service, err)
 	}
 
-	result, err := m.runner.Run(ctx, "", "docker", "cp", fmt.Sprintf("%s:/home/node/.openclaw/.", service), snapshotDir)
+	stateRoot := m.runtimeOpenClawStateRoot(ctx, service)
+	result, err := m.runner.Run(ctx, "", "docker", "cp", fmt.Sprintf("%s:%s/.", service, stateRoot), snapshotDir)
 	if err != nil {
 		return fmt.Errorf("capture runtime state for %s: %w", service, err)
 	}
@@ -1379,6 +1398,61 @@ func canonicalRuntimePluginName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+func (m *Manager) runtimeOpenClawStateRoot(ctx context.Context, service string) string {
+	if workspaceRoot := strings.TrimSpace(m.runtimeOpenClawWorkspaceRoot(service)); workspaceRoot != "" {
+		return path.Clean(workspaceRoot)
+	}
+	if configRoot := strings.TrimSpace(m.runtimeOpenClawConfigDir(ctx, service)); configRoot != "" {
+		return path.Clean(configRoot)
+	}
+	return defaultOpenClawStateRoot
+}
+
+func (m *Manager) runtimeOpenClawConfigDir(ctx context.Context, service string) string {
+	if m.inspector != nil {
+		if info, err := m.inspector.InspectContainer(ctx, service); err == nil {
+			if value := containerEnvValue(info.Config.Env, openClawConfigEnvName); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func (m *Manager) runtimeOpenClawWorkspaceRoot(service string) string {
+	configPath := filepath.Join(m.config.ServiceStateDir(service), "config", service, "openclaw.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+	var cfg runtimeOpenClawConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+	workspace := strings.TrimSpace(cfg.Agents.Defaults.Workspace)
+	if workspace == "" {
+		return ""
+	}
+	if path.IsAbs(workspace) {
+		return path.Dir(workspace)
+	}
+	configRoot := strings.TrimSpace(m.runtimeOpenClawConfigDir(context.Background(), service))
+	if configRoot == "" {
+		configRoot = defaultOpenClawStateRoot
+	}
+	return path.Clean(path.Join(configRoot, path.Dir(workspace)))
+}
+
+func containerEnvValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(entry, prefix))
+		}
+	}
+	return ""
+}
+
 func (m *Manager) snapshotRuntimeComponent(service, token string) (string, error) {
 	root := filepath.Join(m.config.Paths.StateRoot, "tmp", "runtime-plugin")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -1410,11 +1484,17 @@ func (m *Manager) snapshotRuntimeComponent(service, token string) (string, error
 
 func (m *Manager) restoreRuntimeComponent(service, backupDir string) error {
 	destination := m.config.RuntimeComponentDir(service)
-	if err := os.RemoveAll(destination); err != nil {
-		return fmt.Errorf("reset runtime state for %s: %w", service, err)
-	}
 	if err := os.MkdirAll(destination, 0o755); err != nil {
-		return fmt.Errorf("recreate runtime state dir for %s: %w", service, err)
+		return fmt.Errorf("ensure runtime state dir for %s: %w", service, err)
+	}
+	entries, err := os.ReadDir(destination)
+	if err != nil {
+		return fmt.Errorf("read runtime state dir for %s: %w", service, err)
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(destination, entry.Name())); err != nil {
+			return fmt.Errorf("clear runtime state for %s: %w", service, err)
+		}
 	}
 	if err := copyTree(backupDir, destination); err != nil {
 		return fmt.Errorf("restore runtime state for %s: %w", service, err)
@@ -1506,12 +1586,51 @@ func readRuntimePluginPackageInfo(root string) (string, string) {
 	return strings.TrimSpace(pkg.Name), strings.TrimSpace(pkg.Version)
 }
 
-func (m *Manager) installRuntimePlugin(ctx context.Context, service, eventID, requested string, deployable deployablePlugin, source, stagedPackageDir string, beforePlugins map[string]runtimePluginState) (runtimePluginState, error) {
+func (m *Manager) prepareRuntimePluginPackage(ctx context.Context, packageDir string) (string, error) {
+	matches, err := filepath.Glob(filepath.Join(packageDir, "*.tgz"))
+	if err != nil {
+		return "", fmt.Errorf("scan packed plugin artifacts in %s: %w", packageDir, err)
+	}
+	for _, match := range matches {
+		if err := os.Remove(match); err != nil {
+			return "", fmt.Errorf("remove stale packed plugin artifact %s: %w", match, err)
+		}
+	}
+
+	result, err := m.runner.Run(ctx, "", "docker", "run", "--rm", "-v", fmt.Sprintf("%s:/src", packageDir), "-w", "/src", pluginPackBuilderImage, "sh", "-lc", "npm pack --quiet")
+	if err != nil {
+		return "", fmt.Errorf("pack plugin package %s: %w", packageDir, err)
+	}
+	if result.ExitCode != 0 {
+		return "", fmt.Errorf("pack plugin package %s failed: %s", packageDir, strings.TrimSpace(result.Stdout))
+	}
+
+	if artifact := strings.TrimSpace(lastMatchingOutputLine(result.Stdout, ".tgz")); artifact != "" {
+		return filepath.Join(packageDir, artifact), nil
+	}
+	matches, err = filepath.Glob(filepath.Join(packageDir, "*.tgz"))
+	if err != nil {
+		return "", fmt.Errorf("scan packed plugin artifacts in %s: %w", packageDir, err)
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		sort.Strings(matches)
+		return matches[len(matches)-1], nil
+	}
+	return "", fmt.Errorf("pack plugin package %s did not produce a .tgz artifact", packageDir)
+}
+
+func (m *Manager) installRuntimePlugin(ctx context.Context, service, eventID, requested string, deployable deployablePlugin, source, stagedPackageDir, installSourcePath string, beforePlugins map[string]runtimePluginState) (runtimePluginState, error) {
 	if strings.TrimSpace(stagedPackageDir) == "" {
 		return runtimePluginState{}, fmt.Errorf("missing staged plugin package for %s", requested)
 	}
+	if strings.TrimSpace(installSourcePath) == "" {
+		installSourcePath = stagedPackageDir
+	}
 
-	installSpec, cleanup, err := m.stagePluginSourceInRuntime(ctx, service, eventID, stagedPackageDir)
+	installSpec, cleanup, err := m.stagePluginSourceInRuntime(ctx, service, eventID, installSourcePath)
 	if err != nil {
 		return runtimePluginState{}, err
 	}
@@ -1570,8 +1689,12 @@ func (m *Manager) installReplayPlugin(ctx context.Context, service string, event
 		if strings.TrimSpace(event.PackageDir) == "" {
 			return fmt.Errorf("replay event %s is missing staged plugin package", event.EventID)
 		}
+		installSourcePath, packErr := m.prepareRuntimePluginPackage(ctx, event.PackageDir)
+		if packErr != nil {
+			return packErr
+		}
 		var err error
-		installSpec, cleanup, err = m.stagePluginSourceInRuntime(ctx, service, event.EventID, event.PackageDir)
+		installSpec, cleanup, err = m.stagePluginSourceInRuntime(ctx, service, event.EventID, installSourcePath)
 		if err != nil {
 			return err
 		}
@@ -1583,8 +1706,14 @@ func (m *Manager) installReplayPlugin(ctx context.Context, service string, event
 		if sourcePath == "" {
 			return fmt.Errorf("replay event %s is missing staged local source", event.EventID)
 		}
+		installSourcePath := sourcePath
+		if strings.TrimSpace(event.PackageDir) != "" {
+			if packedPath, packErr := m.prepareRuntimePluginPackage(ctx, event.PackageDir); packErr == nil {
+				installSourcePath = packedPath
+			}
+		}
 		var err error
-		installSpec, cleanup, err = m.stagePluginSourceInRuntime(ctx, service, event.EventID, sourcePath)
+		installSpec, cleanup, err = m.stagePluginSourceInRuntime(ctx, service, event.EventID, installSourcePath)
 		if err != nil {
 			return err
 		}
@@ -1669,6 +1798,20 @@ func commandFailureSummary(result cli.CommandResult) string {
 		return text
 	}
 	return fmt.Sprintf("exit code %d", result.ExitCode)
+}
+
+func lastMatchingOutputLine(output, suffix string) string {
+	lines := strings.Split(output, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(lines[index])
+		if line == "" {
+			continue
+		}
+		if strings.HasSuffix(line, suffix) {
+			return line
+		}
+	}
+	return ""
 }
 
 func identifyInstalledPlugin(requested, source, sourcePath string, beforePlugins, afterPlugins map[string]runtimePluginState) (runtimePluginState, error) {

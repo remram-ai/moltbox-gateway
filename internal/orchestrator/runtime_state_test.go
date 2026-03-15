@@ -40,6 +40,8 @@ func (r *simulatedRuntimeRunner) Run(_ context.Context, dir string, name string,
 		return command.Result{ExitCode: 0}, nil
 	case "build":
 		return command.Result{ExitCode: 0}, nil
+	case "run":
+		return r.handleRun(args)
 	case "restart":
 		return command.Result{ExitCode: 0}, nil
 	case "exec":
@@ -49,6 +51,46 @@ func (r *simulatedRuntimeRunner) Run(_ context.Context, dir string, name string,
 	default:
 		return command.Result{ExitCode: 0}, nil
 	}
+}
+
+func (r *simulatedRuntimeRunner) handleRun(args []string) (command.Result, error) {
+	if len(args) == 0 {
+		return command.Result{ExitCode: 1, Stdout: "invalid run"}, nil
+	}
+	if !strings.Contains(strings.Join(args, " "), "npm pack --quiet") {
+		return command.Result{ExitCode: 0}, nil
+	}
+
+	sourceDir := ""
+	for index := 0; index < len(args)-1; index++ {
+		if args[index] != "-v" {
+			continue
+		}
+		mount := args[index+1]
+		split := strings.LastIndex(mount, ":")
+		if split <= 0 || mount[split+1:] != "/src" {
+			continue
+		}
+		sourceDir = mount[:split]
+		break
+	}
+	if sourceDir == "" {
+		return command.Result{ExitCode: 1, Stdout: "missing pack source"}, nil
+	}
+
+	packageName, version := readRuntimePluginPackageInfo(sourceDir)
+	if packageName == "" {
+		packageName = filepath.Base(sourceDir)
+	}
+	if version == "" {
+		version = "1.2.0"
+	}
+	artifactName := packageName + "-" + version + ".tgz"
+	artifactPath := filepath.Join(sourceDir, artifactName)
+	if err := os.WriteFile(artifactPath, []byte("packed plugin artifact\n"), 0o644); err != nil {
+		return command.Result{}, err
+	}
+	return command.Result{ExitCode: 0, Stdout: artifactName + "\n"}, nil
 }
 
 func (r *simulatedRuntimeRunner) handleExec(args []string) (command.Result, error) {
@@ -174,6 +216,15 @@ func (r *simulatedRuntimeRunner) installPlugin(runtimeRoot, spec string) (comman
 				version = sourceVersion
 			}
 		}
+		if strings.EqualFold(filepath.Ext(sourcePath), ".tgz") {
+			if packedName, packedVersion := packedPluginInfo(filepath.Base(sourcePath)); packedName != "" {
+				packageName = packedName
+				pluginID = canonicalRuntimePluginName(packedName)
+				if packedVersion != "" {
+					version = packedVersion
+				}
+			}
+		}
 	}
 	if pluginID == "" {
 		pluginID = canonicalRuntimePluginName(strings.TrimSuffix(filepath.Base(spec), filepath.Ext(spec)))
@@ -233,6 +284,23 @@ func (r *simulatedRuntimeRunner) installPlugin(runtimeRoot, spec string) (comman
 		}
 	}
 	return command.Result{ExitCode: 0, Stdout: pluginID + "\n"}, nil
+}
+
+func packedPluginInfo(filename string) (string, string) {
+	base := strings.TrimSuffix(strings.TrimSpace(filename), filepath.Ext(filename))
+	if base == "" {
+		return "", ""
+	}
+	index := strings.LastIndex(base, "-")
+	if index <= 0 || index >= len(base)-1 {
+		return base, ""
+	}
+	name := base[:index]
+	version := base[index+1:]
+	if strings.Count(version, ".") >= 2 {
+		return name, version
+	}
+	return base, ""
 }
 
 func (r *simulatedRuntimeRunner) listPlugins(runtimeRoot string, args []string) (command.Result, error) {
@@ -917,7 +985,7 @@ func newRuntimeTestManager(t *testing.T) (*Manager, *simulatedRuntimeRunner, *de
 
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-dev", "service.yaml"), "compose_project: openclaw-dev\ncontainer_names:\n  - openclaw-dev\nruntime_required: true\nskip_pull: true\n")
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-dev", "compose.yml.template"), "services:\n  {{ service_name }}:\n    image: \"${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}\"\n    container_name: \"{{ container_name }}\"\n")
-	mustWriteFile(t, filepath.Join(runtimeRepoRoot, "openclaw-dev", "openclaw.json.template"), "{}\n")
+	mustWriteFile(t, filepath.Join(runtimeRepoRoot, "openclaw-dev", "openclaw.json.template"), "{\n  \"agents\": {\n    \"defaults\": {\n      \"workspace\": \"/home/node/.openclaw/workspace\"\n    }\n  }\n}\n")
 	mustWriteFile(t, filepath.Join(runtimeRepoRoot, "openclaw-dev", "model-runtime.yml"), "model: local\n")
 	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "together-escalation", "SKILL.md"), "---\nname: together-escalation\ndescription: test\n---\n")
 	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "semantic-router", "SKILL.md"), "---\nname: semantic-router\ndescription: test\n---\n")
@@ -934,6 +1002,7 @@ func newRuntimeTestManager(t *testing.T) (*Manager, *simulatedRuntimeRunner, *de
 	containerInfo := docker.ContainerInfo{}
 	containerInfo.Name = "/openclaw-dev"
 	containerInfo.Config.Image = defaultRuntimeImage
+	containerInfo.Config.Env = []string{"OPENCLAW_CONFIG_DIR=/app/config/openclaw"}
 	containerInfo.State.Status = "running"
 	containerInfo.State.Running = true
 	containerInfo.State.Health = &struct {
@@ -1027,7 +1096,13 @@ func isContainerSpec(value string) bool {
 }
 
 func runtimeHostPath(runtimeRoot, containerPath string) string {
-	trimmed := strings.TrimPrefix(filepath.ToSlash(containerPath), "/home/node/.openclaw")
+	trimmed := filepath.ToSlash(containerPath)
+	for _, prefix := range []string{"/home/node/.openclaw", "/app/config/openclaw"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			trimmed = strings.TrimPrefix(trimmed, prefix)
+			break
+		}
+	}
 	trimmed = strings.TrimPrefix(trimmed, "/")
 	if trimmed == "." || trimmed == "" {
 		return runtimeRoot

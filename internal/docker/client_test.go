@@ -68,7 +68,7 @@ func TestInspectContainer(t *testing.T) {
 			switch request.URL.Path {
 			case "/containers/gateway/json":
 				writer.Header().Set("Content-Type", "application/json")
-				_, _ = writer.Write([]byte(`{"Name":"/gateway","Config":{"Image":"moltbox-gateway:latest"},"State":{"Status":"running","Running":true}}`))
+				_, _ = writer.Write([]byte(`{"Name":"/gateway","Config":{"Image":"moltbox-gateway:latest","Env":["OPENCLAW_CONFIG_DIR=/app/config/openclaw"]},"State":{"Status":"running","Running":true}}`))
 			case "/containers/missing/json":
 				http.NotFound(writer, request)
 			default:
@@ -95,6 +95,9 @@ func TestInspectContainer(t *testing.T) {
 	}
 	if !info.State.Running {
 		t.Fatal("expected container to be running")
+	}
+	if got := len(info.Config.Env); got != 1 || info.Config.Env[0] != "OPENCLAW_CONFIG_DIR=/app/config/openclaw" {
+		t.Fatalf("info.Config.Env = %#v, want OPENCLAW_CONFIG_DIR entry", info.Config.Env)
 	}
 
 	_, err = client.InspectContainer(ctx, "missing")

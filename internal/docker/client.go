@@ -34,7 +34,8 @@ type VersionInfo struct {
 type ContainerInfo struct {
 	Name   string `json:"Name"`
 	Config struct {
-		Image string `json:"Image"`
+		Image string   `json:"Image"`
+		Env   []string `json:"Env"`
 	} `json:"Config"`
 	State struct {
 		Status  string `json:"Status"`
