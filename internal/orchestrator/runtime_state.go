@@ -1710,7 +1710,7 @@ func (m *Manager) installRuntimePlugin(ctx context.Context, service, eventID, re
 	}
 	defer cleanup()
 
-	if err := m.installRuntimePluginSpec(ctx, service, installSpec, false); err != nil {
+	if err := m.installRuntimePluginSpec(ctx, service, deployable.Name, installSpec, false); err != nil {
 		return runtimePluginState{}, err
 	}
 
@@ -1799,7 +1799,7 @@ func (m *Manager) installReplayPlugin(ctx context.Context, service string, event
 	}
 	defer cleanup()
 
-	return m.installRuntimePluginSpec(ctx, service, installSpec, false)
+	return m.installRuntimePluginSpec(ctx, service, canonicalRuntimePluginName(event.Plugin), installSpec, false)
 }
 
 func (m *Manager) removePluginFromGatewayState(service string, event deploystate.ReplayEvent) (bool, error) {
@@ -1813,8 +1813,12 @@ func (m *Manager) removePluginFromGatewayState(service string, event deploystate
 		return false, err
 	}
 	currentPlugin, ok := currentPlugins[plugin]
+	configChanged, err := m.removeRuntimePluginConfigEntry(service, plugin)
+	if err != nil {
+		return false, err
+	}
 	if !ok {
-		return false, nil
+		return configChanged, nil
 	}
 
 	pluginRoot := strings.TrimSpace(currentPlugin.HostDir)
@@ -1835,10 +1839,21 @@ func (m *Manager) removePluginFromGatewayState(service string, event deploystate
 	return true, nil
 }
 
-func (m *Manager) installRuntimePluginSpec(ctx context.Context, service, installSpec string, pin bool) error {
+func (m *Manager) installRuntimePluginSpec(ctx context.Context, service, pluginID, installSpec string, pin bool) error {
 	if err := m.ensureRuntimePluginRoot(ctx, service); err != nil {
 		return err
 	}
+	policy, err := m.relaxRuntimePluginAllowList(service)
+	if err != nil {
+		return err
+	}
+	restorePolicy := policy.hadAllow
+	defer func() {
+		if !restorePolicy {
+			return
+		}
+		_ = m.restoreRuntimePluginAllowList(service, policy, "")
+	}()
 	args := []string{"plugins", "install", installSpec}
 	if pin {
 		args = append(args, "--pin")
@@ -1849,6 +1864,12 @@ func (m *Manager) installRuntimePluginSpec(ctx context.Context, service, install
 	}
 	if !result.OK {
 		return fmt.Errorf("install plugin %q in %s failed: %s", installSpec, service, commandFailureSummary(result))
+	}
+	if policy.hadAllow {
+		if err := m.restoreRuntimePluginAllowList(service, policy, pluginID); err != nil {
+			return err
+		}
+		restorePolicy = false
 	}
 	return nil
 }
@@ -1873,6 +1894,196 @@ func (m *Manager) ensureRuntimePluginRoot(ctx context.Context, service string) e
 		return fmt.Errorf("prepare plugin root for %s failed: %s", service, strings.TrimSpace(result.Stdout))
 	}
 	return nil
+}
+
+type runtimePluginAllowPolicy struct {
+	hadAllow bool
+	allow    []string
+}
+
+func (m *Manager) relaxRuntimePluginAllowList(service string) (runtimePluginAllowPolicy, error) {
+	configPath := filepath.Join(m.config.RuntimeComponentDir(service), "openclaw.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if errorsIsNotExist(err) {
+			return runtimePluginAllowPolicy{}, nil
+		}
+		return runtimePluginAllowPolicy{}, fmt.Errorf("read runtime config for %s: %w", service, err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return runtimePluginAllowPolicy{}, fmt.Errorf("decode runtime config for %s: %w", service, err)
+	}
+	plugins, ok := config["plugins"].(map[string]any)
+	if !ok {
+		return runtimePluginAllowPolicy{}, nil
+	}
+	allow, hadAllow := runtimePluginAllowValues(plugins["allow"])
+	if !hadAllow {
+		return runtimePluginAllowPolicy{}, nil
+	}
+	delete(plugins, "allow")
+	if err := writeRuntimeOpenClawConfig(configPath, config); err != nil {
+		return runtimePluginAllowPolicy{}, err
+	}
+	return runtimePluginAllowPolicy{
+		hadAllow: true,
+		allow:    allow,
+	}, nil
+}
+
+func (m *Manager) restoreRuntimePluginAllowList(service string, policy runtimePluginAllowPolicy, pluginID string) error {
+	if !policy.hadAllow {
+		return nil
+	}
+	configPath := filepath.Join(m.config.RuntimeComponentDir(service), "openclaw.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if errorsIsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read runtime config for %s: %w", service, err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("decode runtime config for %s: %w", service, err)
+	}
+	plugins := ensureJSONMap(config, "plugins")
+	allow := append([]string(nil), policy.allow...)
+	if trimmed := canonicalRuntimePluginName(pluginID); trimmed != "" {
+		allow = append(allow, trimmed)
+	}
+	plugins["allow"] = jsonStringSlice(uniqueStrings(allow))
+	return writeRuntimeOpenClawConfig(configPath, config)
+}
+
+func (m *Manager) removeRuntimePluginConfigEntry(service, pluginID string) (bool, error) {
+	configPath := filepath.Join(m.config.RuntimeComponentDir(service), "openclaw.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if errorsIsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read runtime config for %s: %w", service, err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return false, fmt.Errorf("decode runtime config for %s: %w", service, err)
+	}
+	plugins, ok := config["plugins"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	changed := false
+	target := canonicalRuntimePluginName(pluginID)
+	if target == "" {
+		return false, nil
+	}
+	if allow, hadAllow := runtimePluginAllowValues(plugins["allow"]); hadAllow {
+		filtered := make([]string, 0, len(allow))
+		for _, item := range allow {
+			if canonicalRuntimePluginName(item) == target {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if len(filtered) == 0 {
+			delete(plugins, "allow")
+		} else {
+			plugins["allow"] = jsonStringSlice(filtered)
+		}
+	}
+	if entries, ok := plugins["entries"].(map[string]any); ok {
+		for key := range entries {
+			if canonicalRuntimePluginName(key) == target {
+				delete(entries, key)
+				changed = true
+			}
+		}
+		if len(entries) == 0 {
+			delete(plugins, "entries")
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, writeRuntimeOpenClawConfig(configPath, config)
+}
+
+func writeRuntimeOpenClawConfig(path string, config map[string]any) error {
+	payload, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode runtime config %s: %w", path, err)
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return fmt.Errorf("write runtime config %s: %w", path, err)
+	}
+	return nil
+}
+
+func ensureJSONMap(root map[string]any, key string) map[string]any {
+	if existing, ok := root[key].(map[string]any); ok {
+		return existing
+	}
+	next := map[string]any{}
+	root[key] = next
+	return next
+}
+
+func runtimePluginAllowValues(value any) ([]string, bool) {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return nil, false
+	}
+	allow := make([]string, 0, len(items))
+	for _, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			continue
+		}
+		text = canonicalRuntimePluginName(text)
+		if text == "" {
+			continue
+		}
+		allow = append(allow, text)
+	}
+	if len(allow) == 0 {
+		return nil, false
+	}
+	return allow, true
+}
+
+func jsonStringSlice(values []string) []any {
+	items := make([]any, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		items = append(items, value)
+	}
+	return items
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		value = canonicalRuntimePluginName(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		items = append(items, value)
+	}
+	return items
 }
 
 func (m *Manager) stagePluginSourceInRuntime(ctx context.Context, service, token, hostSourcePath string) (string, func(), error) {
