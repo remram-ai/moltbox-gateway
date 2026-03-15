@@ -34,6 +34,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/runtime/plugin/install", s.handleRuntimePluginInstall)
 	mux.HandleFunc("/runtime/plugin/remove", s.handleRuntimePluginRemove)
 	mux.HandleFunc("/runtime/openclaw", s.handleRuntimeOpenClaw)
+	mux.HandleFunc("/runtime/", s.handleRuntimeREST)
 	mux.HandleFunc("/token/create", s.handleTokenCreate)
 	mux.HandleFunc("/token/list", s.handleTokenList)
 	mux.HandleFunc("/token/delete", s.handleTokenDelete)
@@ -41,6 +42,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/mcp", s.handleMCP)
 	mux.HandleFunc("/execute", s.handleExecute)
 	return mux
+}
+
+type runtimePluginRESTTarget struct {
+	Environment string
+	Action      string
+	Plugin      string
 }
 
 func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request) {
@@ -570,6 +577,25 @@ func (s *Server) handleRuntimeCheckpoint(writer http.ResponseWriter, request *ht
 	s.writeJSON(writer, http.StatusOK, result)
 }
 
+func (s *Server) handleRuntimeREST(writer http.ResponseWriter, request *http.Request) {
+	target, ok := parseRuntimePluginRESTPath(request.URL.Path)
+	if !ok {
+		http.NotFound(writer, request)
+		return
+	}
+
+	switch target.Action {
+	case "install":
+		s.handleRuntimePluginInstall(writer, request)
+	case "list":
+		s.handleRuntimePluginList(writer, request)
+	case "remove":
+		s.handleRuntimePluginRemove(writer, request)
+	default:
+		http.NotFound(writer, request)
+	}
+}
+
 func (s *Server) handleRuntimeSkillDeploy(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/skill/deploy"))
@@ -711,29 +737,30 @@ func (s *Server) handleRuntimeSkillRollback(writer http.ResponseWriter, request 
 }
 
 func (s *Server) handleRuntimePluginInstall(writer http.ResponseWriter, request *http.Request) {
+	target, restPath := parseRuntimePluginRESTPath(request.URL.Path)
+	recovery := "use POST /runtime/plugin/install"
+	if restPath {
+		recovery = fmt.Sprintf("use POST /runtime/%s/plugins/install", target.Environment)
+	}
 	if request.Method != http.MethodPost {
-		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/plugin/install"))
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", recovery))
 		return
 	}
 
-	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+	route, ok := s.parseRuntimePluginInstallRoute(writer, request, target, restPath)
 	if !ok {
-		return
-	}
-	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimePlugin || payload.Route.Action != "install" {
-		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin install route", "use: dev|test|prod plugin install <package>"))
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Minute)
 	defer cancel()
 
-	result, err := s.orchestrator.RuntimePluginInstall(ctx, payload.Route)
+	result, err := s.orchestrator.RuntimePluginInstall(ctx, route)
 	if err != nil {
 		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
-			payload.Route,
+			route,
 			"runtime_plugin_install_failed",
-			fmt.Sprintf("failed to install plugin '%s' into runtime '%s'", payload.Route.Subject, payload.Route.Runtime),
+			fmt.Sprintf("failed to install plugin '%s' into runtime '%s'", route.Subject, route.Runtime),
 			err.Error(),
 		))
 		return
@@ -742,29 +769,32 @@ func (s *Server) handleRuntimePluginInstall(writer http.ResponseWriter, request 
 }
 
 func (s *Server) handleRuntimePluginList(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/plugin/list"))
+	target, restPath := parseRuntimePluginRESTPath(request.URL.Path)
+	expectedMethod := http.MethodPost
+	recovery := "use POST /runtime/plugin/list"
+	if restPath {
+		expectedMethod = http.MethodGet
+		recovery = fmt.Sprintf("use GET /runtime/%s/plugins", target.Environment)
+	}
+	if request.Method != expectedMethod {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", recovery))
 		return
 	}
 
-	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+	route, ok := s.parseRuntimePluginRoute(writer, request, target, restPath, "list")
 	if !ok {
-		return
-	}
-	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimePlugin || payload.Route.Action != "list" {
-		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin list route", "use: dev|test|prod plugin list"))
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
 	defer cancel()
 
-	result, err := s.orchestrator.RuntimePluginList(ctx, payload.Route)
+	result, err := s.orchestrator.RuntimePluginList(ctx, route)
 	if err != nil {
 		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
-			payload.Route,
+			route,
 			"runtime_plugin_list_failed",
-			fmt.Sprintf("failed to list plugins in runtime '%s'", payload.Route.Runtime),
+			fmt.Sprintf("failed to list plugins in runtime '%s'", route.Runtime),
 			err.Error(),
 		))
 		return
@@ -773,29 +803,32 @@ func (s *Server) handleRuntimePluginList(writer http.ResponseWriter, request *ht
 }
 
 func (s *Server) handleRuntimePluginRemove(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/plugin/remove"))
+	target, restPath := parseRuntimePluginRESTPath(request.URL.Path)
+	expectedMethod := http.MethodPost
+	recovery := "use POST /runtime/plugin/remove"
+	if restPath {
+		expectedMethod = http.MethodDelete
+		recovery = fmt.Sprintf("use DELETE /runtime/%s/plugins/<plugin>", target.Environment)
+	}
+	if request.Method != expectedMethod {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", recovery))
 		return
 	}
 
-	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+	route, ok := s.parseRuntimePluginRoute(writer, request, target, restPath, "remove")
 	if !ok {
-		return
-	}
-	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimePlugin || payload.Route.Action != "remove" {
-		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin remove route", "use: dev|test|prod plugin remove <plugin>"))
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
 	defer cancel()
 
-	result, err := s.orchestrator.RuntimePluginRemove(ctx, payload.Route)
+	result, err := s.orchestrator.RuntimePluginRemove(ctx, route)
 	if err != nil {
 		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
-			payload.Route,
+			route,
 			"runtime_plugin_remove_failed",
-			fmt.Sprintf("failed to remove plugin '%s' from runtime '%s'", payload.Route.Subject, payload.Route.Runtime),
+			fmt.Sprintf("failed to remove plugin '%s' from runtime '%s'", route.Subject, route.Runtime),
 			err.Error(),
 		))
 		return
@@ -915,4 +948,122 @@ func (s *Server) parseServiceRouteRequest(writer http.ResponseWriter, request *h
 	}
 
 	return route, true
+}
+
+func (s *Server) parseRuntimePluginInstallRoute(writer http.ResponseWriter, request *http.Request, target runtimePluginRESTTarget, restPath bool) (*cli.Route, bool) {
+	if !restPath {
+		payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+		if !ok {
+			return nil, false
+		}
+		if payload.Route == nil || payload.Route.Kind != cli.KindRuntimePlugin || payload.Route.Action != "install" {
+			s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin install route", "use: dev|test|prod plugin install <package>"))
+			return nil, false
+		}
+		return payload.Route, true
+	}
+
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+	if !ok {
+		return nil, false
+	}
+	plugin := ""
+	if payload.Route != nil {
+		plugin = strings.TrimSpace(payload.Route.Subject)
+	}
+	if plugin == "" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin install route", "use: dev|test|prod plugin install <package>"))
+		return nil, false
+	}
+
+	route, err := runtimePluginRoute(target.Environment, "install", plugin)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime plugin install route", err.Error()))
+		return nil, false
+	}
+	return route, true
+}
+
+func (s *Server) parseRuntimePluginRoute(writer http.ResponseWriter, request *http.Request, target runtimePluginRESTTarget, restPath bool, action string) (*cli.Route, bool) {
+	if !restPath {
+		payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime plugin route")
+		if !ok {
+			return nil, false
+		}
+		if payload.Route == nil || payload.Route.Kind != cli.KindRuntimePlugin || payload.Route.Action != action {
+			s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", fmt.Sprintf("missing runtime plugin %s route", action), runtimePluginUsage(action)))
+			return nil, false
+		}
+		return payload.Route, true
+	}
+
+	route, err := runtimePluginRoute(target.Environment, action, target.Plugin)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(nil, "parse_error", fmt.Sprintf("missing runtime plugin %s route", action), err.Error()))
+		return nil, false
+	}
+	return route, true
+}
+
+func parseRuntimePluginRESTPath(requestPath string) (runtimePluginRESTTarget, bool) {
+	trimmed := strings.Trim(strings.TrimSpace(requestPath), "/")
+	if trimmed == "" {
+		return runtimePluginRESTTarget{}, false
+	}
+
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 3 || parts[0] != "runtime" || !isRuntimeEnvironment(parts[1]) || parts[2] != "plugins" {
+		return runtimePluginRESTTarget{}, false
+	}
+
+	switch len(parts) {
+	case 3:
+		return runtimePluginRESTTarget{Environment: parts[1], Action: "list"}, true
+	case 4:
+		if parts[3] == "install" {
+			return runtimePluginRESTTarget{Environment: parts[1], Action: "install"}, true
+		}
+		if parts[3] != "" {
+			return runtimePluginRESTTarget{Environment: parts[1], Action: "remove", Plugin: parts[3]}, true
+		}
+	}
+
+	return runtimePluginRESTTarget{}, false
+}
+
+func runtimePluginRoute(environment, action, plugin string) (*cli.Route, error) {
+	args := []string{environment, "plugin", action}
+	if strings.TrimSpace(plugin) != "" {
+		args = append(args, plugin)
+	}
+	result := cli.Parse(args)
+	if result.Route == nil {
+		if result.Envelope != nil && strings.TrimSpace(result.Envelope.RecoveryMessage) != "" {
+			return nil, fmt.Errorf(result.Envelope.RecoveryMessage)
+		}
+		return nil, fmt.Errorf("use: %s", strings.Join(args[:len(args)-1], " "))
+	}
+	return result.Route, nil
+}
+
+func runtimePluginUsage(action string) string {
+	switch action {
+	case "install":
+		return "use: dev|test|prod plugin install <package>"
+	case "list":
+		return "use: dev|test|prod plugin list"
+	case "remove":
+		return "use: dev|test|prod plugin remove <plugin>"
+	default:
+		return "use a documented runtime plugin command"
+	}
+}
+
+func isRuntimeEnvironment(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "dev", "test", "prod":
+		return true
+	default:
+		return false
+	}
 }

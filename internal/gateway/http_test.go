@@ -149,6 +149,79 @@ func TestHandleExecuteRejectsNonSecretRoutes(t *testing.T) {
 	}
 }
 
+func TestParseRuntimePluginRESTPath(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		path       string
+		wantTarget runtimePluginRESTTarget
+		wantOK     bool
+	}{
+		{
+			name:       "install path",
+			path:       "/runtime/dev/plugins/install",
+			wantTarget: runtimePluginRESTTarget{Environment: "dev", Action: "install"},
+			wantOK:     true,
+		},
+		{
+			name:       "list path",
+			path:       "/runtime/test/plugins",
+			wantTarget: runtimePluginRESTTarget{Environment: "test", Action: "list"},
+			wantOK:     true,
+		},
+		{
+			name:       "remove path",
+			path:       "/runtime/prod/plugins/moltbox-telemetry",
+			wantTarget: runtimePluginRESTTarget{Environment: "prod", Action: "remove", Plugin: "moltbox-telemetry"},
+			wantOK:     true,
+		},
+		{
+			name:   "legacy path ignored",
+			path:   "/runtime/plugin/install",
+			wantOK: false,
+		},
+		{
+			name:   "invalid env ignored",
+			path:   "/runtime/stage/plugins",
+			wantOK: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := parseRuntimePluginRESTPath(testCase.path)
+			if ok != testCase.wantOK {
+				t.Fatalf("parseRuntimePluginRESTPath(%q) ok = %v, want %v", testCase.path, ok, testCase.wantOK)
+			}
+			if !testCase.wantOK {
+				return
+			}
+			if got != testCase.wantTarget {
+				t.Fatalf("parseRuntimePluginRESTPath(%q) = %#v, want %#v", testCase.path, got, testCase.wantTarget)
+			}
+		})
+	}
+}
+
+func TestRuntimePluginRouteBuildsCanonicalRoute(t *testing.T) {
+	t.Parallel()
+
+	route, err := runtimePluginRoute("dev", "install", "moltbox-telemetry")
+	if err != nil {
+		t.Fatalf("runtimePluginRoute() error = %v", err)
+	}
+	if route.Kind != cli.KindRuntimePlugin || route.Action != "install" || route.Subject != "moltbox-telemetry" {
+		t.Fatalf("route = %#v, want dev plugin install moltbox-telemetry", route)
+	}
+	if route.Environment != "dev" || route.Runtime != "openclaw-dev" {
+		t.Fatalf("route = %#v, want dev/openclaw-dev", route)
+	}
+}
+
 func newTestServer(t *testing.T, limiter *mcpAuthLimiter) (*Server, *bytes.Buffer) {
 	t.Helper()
 

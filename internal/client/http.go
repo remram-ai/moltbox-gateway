@@ -66,11 +66,11 @@ func (c *HTTPClient) Execute(route *cli.Route, secretValue string) ([]byte, erro
 	case route.Kind == cli.KindRuntimeSkill && route.Action == "remove":
 		return c.post("/runtime/skill/remove", cli.RouteRequest{Route: route})
 	case route.Kind == cli.KindRuntimePlugin && route.Action == "list":
-		return c.post("/runtime/plugin/list", cli.RouteRequest{Route: route})
+		return c.get(runtimePluginPath(route))
 	case route.Kind == cli.KindRuntimePlugin && route.Action == "install":
-		return c.post("/runtime/plugin/install", cli.RouteRequest{Route: route})
+		return c.post(runtimePluginPath(route)+"/install", cli.RouteRequest{Route: route})
 	case route.Kind == cli.KindRuntimePlugin && route.Action == "remove":
-		return c.post("/runtime/plugin/remove", cli.RouteRequest{Route: route})
+		return c.delete(runtimePluginPath(route) + "/" + url.PathEscape(strings.TrimSpace(route.Subject)))
 	case route.Kind == cli.KindRuntimeNative:
 		return c.post("/runtime/openclaw", cli.RouteRequest{Route: route})
 	case route.Kind == cli.KindServiceNative:
@@ -102,6 +102,23 @@ func (c *HTTPClient) post(path string, payload any) ([]byte, error) {
 	request.Header.Set("Content-Type", "application/json")
 
 	return c.do(request)
+}
+
+func (c *HTTPClient) delete(path string) ([]byte, error) {
+	request, err := http.NewRequest(http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.do(request)
+}
+
+func runtimePluginPath(route *cli.Route) string {
+	environment := strings.TrimSpace(route.Environment)
+	if environment == "" {
+		environment = strings.TrimSpace(route.Resource)
+	}
+	return "/runtime/" + url.PathEscape(environment) + "/plugins"
 }
 
 func (c *HTTPClient) do(request *http.Request) ([]byte, error) {

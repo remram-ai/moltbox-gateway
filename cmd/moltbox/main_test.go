@@ -240,11 +240,11 @@ func TestCLIForwardsToGateway(t *testing.T) {
 					t.Fatalf("decode request: %v", err)
 				}
 				_ = json.NewEncoder(writer).Encode(cli.CommandResult{
-					OK:             true,
-					Route:          payload.Route,
-					ContainerName:  "openclaw-dev",
-					ExitCode:       0,
-					Stdout:         "together-escalation\n",
+					OK:            true,
+					Route:         payload.Route,
+					ContainerName: "openclaw-dev",
+					ExitCode:      0,
+					Stdout:        "together-escalation\n",
 				})
 			},
 		},
@@ -274,9 +274,9 @@ func TestCLIForwardsToGateway(t *testing.T) {
 		},
 		{
 			name:       "runtime plugin install",
-			args:       []string{"dev", "plugin", "install", "semantic-router"},
+			args:       []string{"dev", "plugin", "install", "moltbox-telemetry"},
 			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/plugin/install",
+			wantPath:   "/runtime/dev/plugins/install",
 			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
@@ -288,8 +288,8 @@ func TestCLIForwardsToGateway(t *testing.T) {
 					OK:           true,
 					Route:        payload.Route,
 					Runtime:      "openclaw-dev",
-					Plugin:       "semantic-router",
-					Package:      "semantic-router@1.2.0",
+					Plugin:       "moltbox-telemetry",
+					Package:      "moltbox-telemetry@1.2.0",
 					Version:      "1.2.0",
 					Digest:       "sha256:digest",
 					Source:       "npm",
@@ -304,43 +304,35 @@ func TestCLIForwardsToGateway(t *testing.T) {
 		{
 			name:       "runtime plugin list",
 			args:       []string{"dev", "plugin", "list"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/plugin/list",
+			wantMethod: http.MethodGet,
+			wantPath:   "/runtime/dev/plugins",
 			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
 				_ = json.NewEncoder(writer).Encode(cli.RuntimePluginListResult{
 					OK:      true,
-					Route:   payload.Route,
+					Route:   &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "list", Environment: "dev", Runtime: "openclaw-dev"},
 					Runtime: "openclaw-dev",
 					Plugins: []cli.RuntimePluginInfo{
-						{Plugin: "semantic-router", Package: "semantic-router@1.2.0", Version: "1.2.0", Digest: "sha256:digest", Source: "npm"},
+						{Plugin: "moltbox-telemetry", Package: "moltbox-telemetry@1.2.0", Version: "1.2.0", Digest: "sha256:digest", Source: "npm"},
 					},
 				})
 			},
 		},
 		{
 			name:       "runtime plugin remove",
-			args:       []string{"dev", "plugin", "remove", "semantic-router"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/plugin/remove",
+			args:       []string{"dev", "plugin", "remove", "moltbox-telemetry"},
+			wantMethod: http.MethodDelete,
+			wantPath:   "/runtime/dev/plugins/moltbox-telemetry",
 			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
 				_ = json.NewEncoder(writer).Encode(cli.RuntimePluginResult{
 					OK:           true,
-					Route:        payload.Route,
+					Route:        &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "remove", Subject: "moltbox-telemetry", Environment: "dev", Runtime: "openclaw-dev"},
 					Runtime:      "openclaw-dev",
-					Plugin:       "semantic-router",
-					Package:      "semantic-router@1.2.0",
+					Plugin:       "moltbox-telemetry",
+					Package:      "moltbox-telemetry@1.2.0",
 					Version:      "1.2.0",
 					Digest:       "sha256:digest",
 					Source:       "npm",
@@ -517,6 +509,7 @@ func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
 	testCases := []struct {
 		name        string
 		args        []string
+		wantMethod  string
 		wantPath    string
 		wantEnv     string
 		wantRuntime string
@@ -524,6 +517,7 @@ func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
 		{
 			name:        "dev skill deploy",
 			args:        []string{"dev", "skill", "deploy", "together"},
+			wantMethod:  http.MethodPost,
 			wantPath:    "/runtime/skill/deploy",
 			wantEnv:     "dev",
 			wantRuntime: "openclaw-dev",
@@ -531,6 +525,7 @@ func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
 		{
 			name:        "test skill remove",
 			args:        []string{"test", "skill", "remove", "together"},
+			wantMethod:  http.MethodPost,
 			wantPath:    "/runtime/skill/remove",
 			wantEnv:     "test",
 			wantRuntime: "openclaw-test",
@@ -538,28 +533,32 @@ func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
 		{
 			name:        "prod checkpoint",
 			args:        []string{"prod", "checkpoint"},
+			wantMethod:  http.MethodPost,
 			wantPath:    "/runtime/checkpoint",
 			wantEnv:     "prod",
 			wantRuntime: "openclaw-prod",
 		},
 		{
 			name:        "dev plugin install",
-			args:        []string{"dev", "plugin", "install", "semantic-router"},
-			wantPath:    "/runtime/plugin/install",
+			args:        []string{"dev", "plugin", "install", "moltbox-telemetry"},
+			wantMethod:  http.MethodPost,
+			wantPath:    "/runtime/dev/plugins/install",
 			wantEnv:     "dev",
 			wantRuntime: "openclaw-dev",
 		},
 		{
 			name:        "test plugin remove",
-			args:        []string{"test", "plugin", "remove", "semantic-router"},
-			wantPath:    "/runtime/plugin/remove",
+			args:        []string{"test", "plugin", "remove", "moltbox-telemetry"},
+			wantMethod:  http.MethodDelete,
+			wantPath:    "/runtime/test/plugins/moltbox-telemetry",
 			wantEnv:     "test",
 			wantRuntime: "openclaw-test",
 		},
 		{
 			name:        "prod plugin list",
+			wantMethod:  http.MethodGet,
 			args:        []string{"prod", "plugin", "list"},
-			wantPath:    "/runtime/plugin/list",
+			wantPath:    "/runtime/prod/plugins",
 			wantEnv:     "prod",
 			wantRuntime: "openclaw-prod",
 		},
@@ -569,65 +568,85 @@ func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				if request.Method != http.MethodPost {
-					t.Fatalf("method = %s, want POST", request.Method)
+				if request.Method != testCase.wantMethod {
+					t.Fatalf("method = %s, want %s", request.Method, testCase.wantMethod)
 				}
 				if request.URL.Path != testCase.wantPath {
 					t.Fatalf("path = %s, want %s", request.URL.Path, testCase.wantPath)
 				}
 
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
+				payload := cli.RouteRequest{}
+				if request.Method == http.MethodPost {
+					if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+						t.Fatalf("decode request: %v", err)
+					}
+					if payload.Route == nil {
+						t.Fatal("payload.route = nil")
+					}
+					if payload.Route.Environment != testCase.wantEnv || payload.Route.Runtime != testCase.wantRuntime {
+						t.Fatalf("payload.route = %#v, want env=%s runtime=%s", payload.Route, testCase.wantEnv, testCase.wantRuntime)
+					}
 				}
-				if payload.Route == nil {
-					t.Fatal("payload.route = nil")
-				}
-				if payload.Route.Environment != testCase.wantEnv || payload.Route.Runtime != testCase.wantRuntime {
-					t.Fatalf("payload.route = %#v, want env=%s runtime=%s", payload.Route, testCase.wantEnv, testCase.wantRuntime)
+
+				route := payload.Route
+				if route == nil {
+					action := "list"
+					subject := ""
+					if strings.Contains(request.URL.Path, "/plugins/") {
+						action = "remove"
+						subject = strings.TrimPrefix(request.URL.Path, "/runtime/"+testCase.wantEnv+"/plugins/")
+					}
+					route = &cli.Route{
+						Resource:    testCase.wantEnv,
+						Kind:        cli.KindRuntimePlugin,
+						Action:      action,
+						Subject:     subject,
+						Environment: testCase.wantEnv,
+						Runtime:     testCase.wantRuntime,
+					}
 				}
 
 				switch request.URL.Path {
 				case "/runtime/checkpoint":
 					_ = json.NewEncoder(writer).Encode(cli.RuntimeCheckpointResult{
 						OK:            true,
-						Route:         payload.Route,
+						Route:         route,
 						Runtime:       testCase.wantRuntime,
 						CheckpointID:  "checkpoint-123",
 						Image:         "moltbox-runtime:" + testCase.wantRuntime + "-checkpoint-123",
 						SnapshotDir:   "/srv/moltbox-state/runtime-baselines/" + testCase.wantRuntime + "/checkpoint-123/snapshot",
 						ReplayCleared: true,
 					})
-				case "/runtime/plugin/list":
+				case "/runtime/prod/plugins":
 					_ = json.NewEncoder(writer).Encode(cli.RuntimePluginListResult{
 						OK:      true,
-						Route:   payload.Route,
+						Route:   route,
 						Runtime: testCase.wantRuntime,
 						Plugins: []cli.RuntimePluginInfo{
-							{Plugin: "semantic-router", Package: "semantic-router@1.2.0", Version: "1.2.0", Digest: "sha256:digest", Source: "npm"},
+							{Plugin: "moltbox-telemetry", Package: "moltbox-telemetry@1.2.0", Version: "1.2.0", Digest: "sha256:digest", Source: "npm"},
 						},
 					})
-				case "/runtime/plugin/install", "/runtime/plugin/remove":
+				case "/runtime/dev/plugins/install", "/runtime/test/plugins/moltbox-telemetry":
 					_ = json.NewEncoder(writer).Encode(cli.RuntimePluginResult{
 						OK:      true,
-						Route:   payload.Route,
+						Route:   route,
 						Runtime: testCase.wantRuntime,
-						Plugin:  "semantic-router",
-						Package: "semantic-router@1.2.0",
+						Plugin:  "moltbox-telemetry",
+						Package: "moltbox-telemetry@1.2.0",
 						Version: "1.2.0",
 						Digest:  "sha256:digest",
 						Source:  "npm",
-						Action:  payload.Route.Action,
+						Action:  route.Action,
 						Message: "ok",
 					})
 				default:
 					_ = json.NewEncoder(writer).Encode(cli.RuntimeSkillResult{
 						OK:             true,
-						Route:          payload.Route,
+						Route:          route,
 						Runtime:        testCase.wantRuntime,
 						Skill:          "together",
 						CanonicalSkill: "together-escalation",
-						Action:         payload.Route.Action,
+						Action:         route.Action,
 						Message:        "ok",
 					})
 				}
