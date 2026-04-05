@@ -27,7 +27,7 @@ func (r *Runner) ExecuteArgs(args []string, secretValue string) ([]byte, int, er
 func (r *Runner) ExecuteParse(result cli.ParseResult, secretValue string) ([]byte, int, error) {
 	switch {
 	case result.Help:
-		return []byte(helpPayload()), cli.ExitOK, nil
+		return []byte(helpPayload(result.HelpTopic)), cli.ExitOK, nil
 	case result.Version:
 		return []byte(fmt.Sprintf("moltbox %s\n", cli.Version)), cli.ExitOK, nil
 	case result.Envelope != nil:
@@ -38,6 +38,14 @@ func (r *Runner) ExecuteParse(result cli.ParseResult, secretValue string) ([]byt
 	if result.Route == nil {
 		payload, err := marshal(cli.Error(nil, "parse_error", "missing route", "use a documented moltbox command"))
 		return payload, cli.ExitParseError, err
+	}
+	if result.Route.Kind == cli.KindBootstrap {
+		payload, err := marshal(cli.NotImplemented(
+			result.Route,
+			"bootstrap gateway is not implemented yet",
+			"bootstrap the gateway with the documented host runbook or implement the local bootstrap helper first",
+		))
+		return payload, cli.ExitNotImplemented, err
 	}
 
 	payload, err := client.NewHTTPClient(r.gatewayURL).Execute(result.Route, secretValue)
@@ -64,8 +72,8 @@ func marshal(payload any) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func helpPayload() string {
+func helpPayload(topic string) string {
 	var buffer bytes.Buffer
-	_ = cli.WriteHelp(&buffer)
+	_ = cli.WriteHelp(&buffer, topic)
 	return buffer.String()
 }

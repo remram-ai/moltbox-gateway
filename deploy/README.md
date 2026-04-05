@@ -12,7 +12,7 @@ host moltbox CLI
 
 Current appliance posture:
 
-- the host CLI is installed at `~/.local/bin/moltbox`
+- the host CLI is installed at `/usr/local/bin/moltbox`
 - the long-running control plane is the `gateway` container
 - the gateway image tag is `moltbox-gateway:latest`
 - service definitions come from `moltbox-services`
@@ -22,9 +22,11 @@ Current appliance posture:
 Useful verification commands:
 
 - `moltbox gateway status`
-- `moltbox gateway service status <service>`
-- `moltbox dev openclaw skills list`
-- `moltbox gateway docker ping`
+- `moltbox service list`
+- `moltbox service status <service>`
+- `moltbox test openclaw health --json`
+- `moltbox prod openclaw health --json`
+- `moltbox ollama list`
 
 The host CLI remains a thin client.
 The control-plane behavior lives in the `gateway` container and the service orchestration code in this repository.

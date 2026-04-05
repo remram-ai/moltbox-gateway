@@ -1,12 +1,15 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseRuntimeOpenClawAgentNormalizesMessageFlag(t *testing.T) {
 	t.Parallel()
 
 	result := Parse([]string{
-		"dev",
+		"test",
 		"openclaw",
 		"agent",
 		"--agent",
@@ -32,10 +35,114 @@ func TestParseRuntimeOpenClawAgentNormalizesMessageFlag(t *testing.T) {
 	}
 }
 
-func TestParseScopedSecretsSetJoinsInlineValue(t *testing.T) {
+func TestParseServiceContract(t *testing.T) {
 	t.Parallel()
 
-	result := Parse([]string{"dev", "secrets", "set", "TEST_SECRET", "value", "with", "spaces"})
+	testCases := []struct {
+		name        string
+		args        []string
+		wantKind    string
+		wantAction  string
+		wantSubject string
+	}{
+		{
+			name:       "service list",
+			args:       []string{"service", "list"},
+			wantKind:   KindService,
+			wantAction: "list",
+		},
+		{
+			name:        "service status",
+			args:        []string{"service", "status", "test"},
+			wantKind:    KindService,
+			wantAction:  "status",
+			wantSubject: "test",
+		},
+		{
+			name:        "service deploy",
+			args:        []string{"service", "deploy", "prod"},
+			wantKind:    KindService,
+			wantAction:  "deploy",
+			wantSubject: "prod",
+		},
+		{
+			name:        "service restart",
+			args:        []string{"service", "restart", "caddy"},
+			wantKind:    KindService,
+			wantAction:  "restart",
+			wantSubject: "caddy",
+		},
+		{
+			name:        "service logs",
+			args:        []string{"service", "logs", "ollama"},
+			wantKind:    KindService,
+			wantAction:  "logs",
+			wantSubject: "ollama",
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := Parse(testCase.args)
+			if result.Route == nil {
+				t.Fatal("Parse() route = nil")
+			}
+			if result.Route.Kind != testCase.wantKind || result.Route.Action != testCase.wantAction || result.Route.Subject != testCase.wantSubject {
+				t.Fatalf("Parse() route = %#v", result.Route)
+			}
+		})
+	}
+}
+
+func TestParseRuntimeOpenClawAcrossEnvironments(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		args        []string
+		wantEnv     string
+		wantRuntime string
+	}{
+		{
+			name:        "test openclaw",
+			args:        []string{"test", "openclaw", "health", "--json"},
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+		},
+		{
+			name:        "prod openclaw",
+			args:        []string{"prod", "openclaw", "health", "--json"},
+			wantEnv:     "prod",
+			wantRuntime: "openclaw-prod",
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := Parse(testCase.args)
+			if result.Route == nil {
+				t.Fatal("Parse() route = nil")
+			}
+			if result.Route.Kind != KindRuntimeNative || result.Route.Action != "openclaw" {
+				t.Fatalf("Parse() route = %#v, want runtime native openclaw route", result.Route)
+			}
+			if result.Route.Environment != testCase.wantEnv || result.Route.Runtime != testCase.wantRuntime {
+				t.Fatalf("Parse() route = %#v, want env=%s runtime=%s", result.Route, testCase.wantEnv, testCase.wantRuntime)
+			}
+		})
+	}
+}
+
+func TestParseSecretsSetJoinsInlineValue(t *testing.T) {
+	t.Parallel()
+
+	result := Parse([]string{"secret", "set", "test", "TEST_SECRET", "value", "with", "spaces"})
 	if result.Route == nil {
 		t.Fatal("Parse() route = nil")
 	}
@@ -56,279 +163,94 @@ func TestParseGatewayMCPStdio(t *testing.T) {
 	}
 }
 
-func TestParseRuntimeSkillDeploy(t *testing.T) {
+func TestParseBootstrapGateway(t *testing.T) {
 	t.Parallel()
 
-	result := Parse([]string{"dev", "skill", "deploy", "together"})
+	result := Parse([]string{"bootstrap", "gateway"})
 	if result.Route == nil {
 		t.Fatal("Parse() route = nil")
 	}
-	if result.Route.Kind != KindRuntimeSkill || result.Route.Action != "deploy" || result.Route.Subject != "together" {
-		t.Fatalf("Parse() route = %#v, want dev runtime skill deploy route", result.Route)
+	if result.Route.Kind != KindBootstrap || result.Route.Action != "gateway" || result.Route.Subject != "gateway" {
+		t.Fatalf("Parse() route = %#v, want bootstrap gateway route", result.Route)
 	}
 }
 
-func TestParseRuntimeSkillRemove(t *testing.T) {
+func TestParseRetiredNamespacesFailExplicitly(t *testing.T) {
 	t.Parallel()
 
-	result := Parse([]string{"dev", "skill", "remove", "together"})
-	if result.Route == nil {
-		t.Fatal("Parse() route = nil")
-	}
-	if result.Route.Kind != KindRuntimeSkill || result.Route.Action != "remove" || result.Route.Subject != "together" {
-		t.Fatalf("Parse() route = %#v, want dev runtime skill remove route", result.Route)
-	}
-}
-
-func TestParseRuntimePluginInstall(t *testing.T) {
-	t.Parallel()
-
-	result := Parse([]string{"dev", "plugin", "install", "semantic-router"})
-	if result.Route == nil {
-		t.Fatal("Parse() route = nil")
-	}
-	if result.Route.Kind != KindRuntimePlugin || result.Route.Action != "install" || result.Route.Subject != "semantic-router" {
-		t.Fatalf("Parse() route = %#v, want dev runtime plugin install route", result.Route)
-	}
-}
-
-func TestParseRuntimePluginRemove(t *testing.T) {
-	t.Parallel()
-
-	result := Parse([]string{"dev", "plugin", "remove", "semantic-router"})
-	if result.Route == nil {
-		t.Fatal("Parse() route = nil")
-	}
-	if result.Route.Kind != KindRuntimePlugin || result.Route.Action != "remove" || result.Route.Subject != "semantic-router" {
-		t.Fatalf("Parse() route = %#v, want dev runtime plugin remove route", result.Route)
-	}
-}
-
-func TestParseRuntimeContractAcrossEnvironments(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name        string
-		args        []string
-		wantKind    string
-		wantAction  string
-		wantSubject string
-		wantEnv     string
-		wantRuntime string
-	}{
-		{
-			name:        "dev skill deploy",
-			args:        []string{"dev", "skill", "deploy", "together"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "deploy",
-			wantSubject: "together",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "dev skill remove",
-			args:        []string{"dev", "skill", "remove", "together"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "remove",
-			wantSubject: "together",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "dev skill list",
-			args:        []string{"dev", "skill", "list"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "list",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "dev checkpoint",
-			args:        []string{"dev", "checkpoint"},
-			wantKind:    KindRuntimeAction,
-			wantAction:  "checkpoint",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "dev plugin install",
-			args:        []string{"dev", "plugin", "install", "semantic-router"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "install",
-			wantSubject: "semantic-router",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "dev plugin remove",
-			args:        []string{"dev", "plugin", "remove", "semantic-router"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "remove",
-			wantSubject: "semantic-router",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "dev plugin list",
-			args:        []string{"dev", "plugin", "list"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "list",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "test skill deploy",
-			args:        []string{"test", "skill", "deploy", "together"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "deploy",
-			wantSubject: "together",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "test skill remove",
-			args:        []string{"test", "skill", "remove", "together"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "remove",
-			wantSubject: "together",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "test skill list",
-			args:        []string{"test", "skill", "list"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "list",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "test checkpoint",
-			args:        []string{"test", "checkpoint"},
-			wantKind:    KindRuntimeAction,
-			wantAction:  "checkpoint",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "test plugin install",
-			args:        []string{"test", "plugin", "install", "semantic-router"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "install",
-			wantSubject: "semantic-router",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "test plugin remove",
-			args:        []string{"test", "plugin", "remove", "semantic-router"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "remove",
-			wantSubject: "semantic-router",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "test plugin list",
-			args:        []string{"test", "plugin", "list"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "list",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "prod skill deploy",
-			args:        []string{"prod", "skill", "deploy", "together"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "deploy",
-			wantSubject: "together",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
-		{
-			name:        "prod skill remove",
-			args:        []string{"prod", "skill", "remove", "together"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "remove",
-			wantSubject: "together",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
-		{
-			name:        "prod skill list",
-			args:        []string{"prod", "skill", "list"},
-			wantKind:    KindRuntimeSkill,
-			wantAction:  "list",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
-		{
-			name:        "prod checkpoint",
-			args:        []string{"prod", "checkpoint"},
-			wantKind:    KindRuntimeAction,
-			wantAction:  "checkpoint",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
-		{
-			name:        "prod plugin install",
-			args:        []string{"prod", "plugin", "install", "semantic-router"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "install",
-			wantSubject: "semantic-router",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
-		{
-			name:        "prod plugin remove",
-			args:        []string{"prod", "plugin", "remove", "semantic-router"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "remove",
-			wantSubject: "semantic-router",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
-		{
-			name:        "prod plugin list",
-			args:        []string{"prod", "plugin", "list"},
-			wantKind:    KindRuntimePlugin,
-			wantAction:  "list",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
+	retired := []string{
+		"dev",
+		"opensearch",
+		"caddy",
+		"runtime",
+		"skill",
+		"plugin",
+		"tools",
+		"host",
+		"openclaw-dev",
+		"openclaw-test",
+		"openclaw-prod",
 	}
 
-	for _, testCase := range testCases {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
+	for _, value := range retired {
+		value := value
+		t.Run(value, func(t *testing.T) {
 			t.Parallel()
 
-			result := Parse(testCase.args)
-			if result.Route == nil {
-				t.Fatal("Parse() route = nil")
+			result := Parse([]string{value})
+			if result.Code != ExitParseError {
+				t.Fatalf("Parse() code = %d, want %d", result.Code, ExitParseError)
 			}
-			if result.Route.Kind != testCase.wantKind || result.Route.Action != testCase.wantAction {
-				t.Fatalf("Parse() route = %#v, want kind=%s action=%s", result.Route, testCase.wantKind, testCase.wantAction)
-			}
-			if result.Route.Subject != testCase.wantSubject {
-				t.Fatalf("Parse() subject = %q, want %q", result.Route.Subject, testCase.wantSubject)
-			}
-			if result.Route.Environment != testCase.wantEnv || result.Route.Runtime != testCase.wantRuntime {
-				t.Fatalf("Parse() route = %#v, want env=%s runtime=%s", result.Route, testCase.wantEnv, testCase.wantRuntime)
+			if result.Envelope == nil || result.Envelope.ErrorType != "retired_namespace" {
+				t.Fatalf("Parse() envelope = %#v, want retired namespace", result.Envelope)
 			}
 		})
 	}
 }
 
-func TestParseRuntimeSkillRollbackAlias(t *testing.T) {
+func TestParseGatewayLegacySurfacesFailExplicitly(t *testing.T) {
 	t.Parallel()
 
-	result := Parse([]string{"dev", "skill", "rollback", "together"})
-	if result.Route == nil {
-		t.Fatal("Parse() route = nil")
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{
+			args: []string{"gateway", "service", "status", "test"},
+			want: "'gateway service' is no longer the public service lifecycle surface",
+		},
+		{
+			args: []string{"gateway", "docker", "ping"},
+			want: "'gateway docker' is no longer part of the public CLI contract",
+		},
 	}
-	if result.Route.Kind != KindRuntimeSkill || result.Route.Action != "remove" || result.Route.Subject != "together" {
-		t.Fatalf("Parse() route = %#v, want dev runtime skill remove alias route", result.Route)
+
+	for _, test := range tests {
+		test := test
+		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
+			t.Parallel()
+
+			result := Parse(test.args)
+			if result.Envelope == nil {
+				t.Fatal("Parse() envelope = nil")
+			}
+			if result.Envelope.ErrorType != "retired_namespace" {
+				t.Fatalf("Parse() envelope = %#v, want retired_namespace", result.Envelope)
+			}
+			if result.Envelope.ErrorMessage != test.want {
+				t.Fatalf("Parse() error_message = %q, want %q", result.Envelope.ErrorMessage, test.want)
+			}
+		})
+	}
+}
+
+func TestValidatePublicServiceRejectsGatewayMutations(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []string{"deploy", "restart"} {
+		if errEnvelope := validatePublicService(action, "gateway"); errEnvelope == nil {
+			t.Fatalf("validatePublicService(%q, gateway) = nil, want error", action)
+		}
 	}
 }
 

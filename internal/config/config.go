@@ -62,8 +62,8 @@ func Default() Config {
 			Port: 7460,
 		},
 		CLI: CLIConfig{
-			Path:       "moltbox",
-			ConfigPath: "",
+			Path:       "/usr/local/bin/moltbox",
+			ConfigPath: DefaultConfigPath,
 		},
 	}
 }
@@ -178,12 +178,6 @@ func ConfigPath() string {
 	if value := strings.TrimSpace(os.Getenv("MOLTBOX_CONFIG_PATH")); value != "" {
 		return value
 	}
-	for _, home := range candidateHomeDirs() {
-		candidate := filepath.Join(home, ".config", "moltbox", "config.yaml")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
 	return DefaultConfigPath
 }
 
@@ -233,28 +227,4 @@ func splitYAMLKeyValue(line string) (string, string, bool) {
 		return key, "", false
 	}
 	return key, strings.Trim(value, `"'`), true
-}
-
-func candidateHomeDirs() []string {
-	values := []string{
-		strings.TrimSpace(os.Getenv("HOME")),
-		strings.TrimSpace(os.Getenv("USERPROFILE")),
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		values = append(values, strings.TrimSpace(home))
-	}
-
-	seen := make(map[string]struct{}, len(values))
-	homes := make([]string, 0, len(values))
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		homes = append(homes, value)
-	}
-	return homes
 }

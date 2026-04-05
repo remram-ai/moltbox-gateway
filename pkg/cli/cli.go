@@ -21,7 +21,9 @@ const (
 )
 
 const (
+	KindBootstrap      = "bootstrap"
 	KindGateway        = "gateway"
+	KindService        = "service"
 	KindGatewayService = "gateway_service"
 	KindGatewayDocker  = "gateway_docker"
 	KindGatewayMCP     = "gateway_mcp"
@@ -34,20 +36,37 @@ const (
 	KindServiceNative  = "service_passthrough"
 )
 
-var retiredNamespaces = map[string]struct{}{
-	"runtime":       {},
-	"skill":         {},
-	"tools":         {},
-	"host":          {},
-	"openclaw-dev":  {},
-	"openclaw-test": {},
-	"openclaw-prod": {},
+var retiredNamespaces = map[string]string{
+	"dev":           "the appliance no longer provides a dev runtime; use local development or the test runtime",
+	"opensearch":    "OpenSearch is removed from the appliance",
+	"caddy":         "Caddy is managed through the service plane, not a native CLI passthrough",
+	"runtime":       "the runtime namespace is retired",
+	"skill":         "skill deployment is no longer a public Moltbox CLI surface",
+	"plugin":        "plugin deployment is no longer a public Moltbox CLI surface",
+	"tools":         "the tools namespace is retired",
+	"host":          "the host namespace is retired",
+	"openclaw-dev":  "internal runtime identifiers are not public CLI namespaces",
+	"openclaw-test": "internal runtime identifiers are not public CLI namespaces",
+	"openclaw-prod": "internal runtime identifiers are not public CLI namespaces",
 }
 
 var runtimeMappings = map[string]string{
-	"dev":  "openclaw-dev",
 	"test": "openclaw-test",
 	"prod": "openclaw-prod",
+}
+
+var publicServices = map[string]string{
+	"gateway": "gateway",
+	"caddy":   "caddy",
+	"ollama":  "ollama",
+	"test":    "openclaw-test",
+	"prod":    "openclaw-prod",
+}
+
+var secretScopes = map[string]struct{}{
+	"service": {},
+	"test":    {},
+	"prod":    {},
 }
 
 type Route struct {
@@ -167,6 +186,22 @@ type ServiceActionResult struct {
 	Containers []ServiceContainerStatus `json:"containers,omitempty"`
 }
 
+type ServiceListItem struct {
+	Service        string `json:"service"`
+	CanonicalName  string `json:"canonical_name,omitempty"`
+	ComposeProject string `json:"compose_project,omitempty"`
+	ContainerName  string `json:"container_name,omitempty"`
+	Status         string `json:"status,omitempty"`
+	Running        bool   `json:"running"`
+	Health         string `json:"health,omitempty"`
+}
+
+type ServiceListResult struct {
+	OK       bool              `json:"ok"`
+	Route    *Route            `json:"route"`
+	Services []ServiceListItem `json:"services"`
+}
+
 type RuntimeCheckpointResult struct {
 	OK            bool   `json:"ok"`
 	Route         *Route `json:"route"`
@@ -226,7 +261,7 @@ type RuntimePluginListResult struct {
 
 type CommandResult struct {
 	OK            bool     `json:"ok"`
-	Route         *Route   `json:"route"`
+	Route         *Route   `json:"route,omitempty"`
 	ContainerName string   `json:"container_name,omitempty"`
 	Command       []string `json:"command,omitempty"`
 	Stdout        string   `json:"stdout,omitempty"`
@@ -296,56 +331,83 @@ type GatewayTokenListResult struct {
 }
 
 type ParseResult struct {
-	Route    *Route
-	Envelope *Envelope
-	Code     int
-	Help     bool
-	Version  bool
+	Route     *Route
+	Envelope  *Envelope
+	Code      int
+	Help      bool
+	HelpTopic string
+	Version   bool
 }
 
 func Parse(args []string) ParseResult {
 	if len(args) == 0 {
-		return ParseResult{Help: true, Code: ExitOK}
+		return ParseResult{Help: true, HelpTopic: "global", Code: ExitOK}
 	}
 
 	if len(args) == 1 && isHelpFlag(args[0]) {
-		return ParseResult{Help: true, Code: ExitOK}
+		return ParseResult{Help: true, HelpTopic: "global", Code: ExitOK}
 	}
 
 	if len(args) == 1 && args[0] == "--version" {
 		return ParseResult{Version: true, Code: ExitOK}
 	}
 
-	resource := args[0]
-	if _, retired := retiredNamespaces[resource]; retired {
-		return ParseResult{
-			Envelope: Error(nil,
-				"retired_namespace",
-				fmt.Sprintf("'%s' is a retired top-level namespace", resource),
-				"use one of: gateway, dev, test, prod, service, ollama, opensearch, caddy",
-			),
-			Code: ExitParseError,
+	if len(args) == 2 && isHelpFlag(args[1]) {
+		if topic := normalizeHelpTopic(args[0]); topic != "" {
+			return ParseResult{Help: true, HelpTopic: topic, Code: ExitOK}
 		}
 	}
 
+	resource := args[0]
+	if reason, retired := retiredNamespaces[resource]; retired {
+		return retiredNamespaceResult(resource, reason)
+	}
+
 	switch resource {
+	case "bootstrap":
+		return parseBootstrap(args)
 	case "gateway":
 		return parseGateway(args)
-	case "dev", "test", "prod":
-		return parseRuntime(args)
 	case "service":
-		return parseServiceScope(args)
-	case "ollama", "opensearch", "caddy":
+		return parseService(args)
+	case "test", "prod":
+		return parseRuntimeOpenClaw(args)
+	case "ollama":
 		return parseServicePassthrough(args)
+	case "secret":
+		return parseSecret(args)
 	default:
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown resource '%s'", resource),
-				"use one of: gateway, dev, test, prod, service, ollama, opensearch, caddy",
+				"use one of: bootstrap, gateway, service, test, prod, ollama, secret",
 			),
 			Code: ExitParseError,
 		}
+	}
+}
+
+func parseBootstrap(args []string) ParseResult {
+	if len(args) != 2 || args[1] != "gateway" {
+		return ParseResult{
+			Envelope: Error(nil,
+				"parse_error",
+				"invalid bootstrap command",
+				"use: bootstrap gateway",
+			),
+			Code: ExitParseError,
+		}
+	}
+
+	return ParseResult{
+		Route: &Route{
+			Resource: "bootstrap",
+			Kind:     KindBootstrap,
+			Tokens:   append([]string(nil), args...),
+			Action:   "gateway",
+			Subject:  "gateway",
+		},
 	}
 }
 
@@ -355,7 +417,7 @@ func parseGateway(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				"missing gateway command",
-				"use: gateway status|update|logs|mcp-stdio|token | gateway service <deploy|restart|status> <service> | gateway docker ping",
+				"use: gateway status|update|logs|mcp-stdio",
 			),
 			Code: ExitParseError,
 		}
@@ -401,148 +463,128 @@ func parseGateway(args []string) ParseResult {
 			},
 		}
 	case "service":
-		if len(args) != 4 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					"invalid gateway service command",
-					"use: gateway service <deploy|restart|status> <service>",
-				),
-				Code: ExitParseError,
-			}
-		}
-		switch args[2] {
-		case "deploy", "restart", "status":
-			return ParseResult{
-				Route: &Route{
-					Resource: "gateway",
-					Kind:     KindGatewayService,
-					Tokens:   append([]string(nil), args...),
-					Action:   args[2],
-					Subject:  args[3],
-				},
-			}
-		default:
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("unknown gateway service action '%s'", args[2]),
-					"use: gateway service <deploy|restart|status> <service>",
-				),
-				Code: ExitParseError,
-			}
-		}
-	case "docker":
-		if len(args) == 3 && args[2] == "ping" {
-			return ParseResult{
-				Route: &Route{
-					Resource: "gateway",
-					Kind:     KindGatewayDocker,
-					Tokens:   append([]string(nil), args...),
-					Action:   "ping",
-					Subject:  "docker",
-				},
-			}
-		}
-		if len(args) == 4 && args[2] == "run" {
-			return ParseResult{
-				Route: &Route{
-					Resource: "gateway",
-					Kind:     KindGatewayDocker,
-					Tokens:   append([]string(nil), args...),
-					Action:   "run",
-					Subject:  args[3],
-				},
-			}
-		}
 		return ParseResult{
 			Envelope: Error(nil,
-				"parse_error",
-				"invalid gateway docker command",
-				"use: gateway docker ping | gateway docker run <image>",
+				"retired_namespace",
+				"'gateway service' is no longer the public service lifecycle surface",
+				"use: service list|status|deploy|restart|logs <service>",
+			),
+			Code: ExitParseError,
+		}
+	case "docker":
+		return ParseResult{
+			Envelope: Error(nil,
+				"retired_namespace",
+				"'gateway docker' is no longer part of the public CLI contract",
+				"use the service plane or bootstrap gateway instead",
 			),
 			Code: ExitParseError,
 		}
 	case "token":
-		if len(args) < 3 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					"invalid gateway token command",
-					"use: gateway token create <name> | gateway token list | gateway token delete <name> | gateway token rotate <name>",
-				),
-				Code: ExitParseError,
-			}
-		}
-		switch args[2] {
-		case "list":
-			if len(args) != 3 {
-				return ParseResult{
-					Envelope: Error(nil,
-						"parse_error",
-						"unexpected arguments after 'gateway token list'",
-						"use: gateway token list",
-					),
-					Code: ExitParseError,
-				}
-			}
-			return ParseResult{
-				Route: &Route{
-					Resource: "gateway",
-					Kind:     KindGatewayToken,
-					Tokens:   append([]string(nil), args...),
-					Action:   args[2],
-				},
-			}
-		case "create", "delete", "rotate":
-			if len(args) != 4 {
-				return ParseResult{
-					Envelope: Error(nil,
-						"parse_error",
-						fmt.Sprintf("invalid gateway token %s command", args[2]),
-						fmt.Sprintf("use: gateway token %s <name>", args[2]),
-					),
-					Code: ExitParseError,
-				}
-			}
-			return ParseResult{
-				Route: &Route{
-					Resource: "gateway",
-					Kind:     KindGatewayToken,
-					Tokens:   append([]string(nil), args...),
-					Action:   args[2],
-					Subject:  args[3],
-				},
-			}
-		default:
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("unknown gateway token action '%s'", args[2]),
-					"use: gateway token create <name> | gateway token list | gateway token delete <name> | gateway token rotate <name>",
-				),
-				Code: ExitParseError,
-			}
+		return ParseResult{
+			Envelope: Error(nil,
+				"retired_namespace",
+				"'gateway token' is no longer a public operator surface",
+				"use the documented internal gateway token workflow instead",
+			),
+			Code: ExitParseError,
 		}
 	default:
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown gateway command '%s'", args[1]),
-				"use: gateway status|update|logs|mcp-stdio|token | gateway service <deploy|restart|status> <service> | gateway docker ping | gateway docker run <image>",
+				"use: gateway status|update|logs|mcp-stdio",
 			),
 			Code: ExitParseError,
 		}
 	}
 }
 
-func parseRuntime(args []string) ParseResult {
+func parseService(args []string) ParseResult {
+	if len(args) < 2 {
+		return ParseResult{
+			Envelope: Error(nil,
+				"parse_error",
+				"missing service command",
+				"use: service list | service status <service> | service deploy <service> | service restart <service> | service logs <service>",
+			),
+			Code: ExitParseError,
+		}
+	}
+
+	switch args[1] {
+	case "list":
+		if len(args) != 2 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					"unexpected arguments after 'service list'",
+					"use: service list",
+				),
+				Code: ExitParseError,
+			}
+		}
+		return ParseResult{
+			Route: &Route{
+				Resource: "service",
+				Kind:     KindService,
+				Tokens:   append([]string(nil), args...),
+				Action:   "list",
+			},
+		}
+	case "status", "deploy", "restart", "logs":
+		if len(args) != 3 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("invalid service %s command", args[1]),
+					fmt.Sprintf("use: service %s <service>", args[1]),
+				),
+				Code: ExitParseError,
+			}
+		}
+		service := strings.TrimSpace(args[2])
+		if errEnvelope := validatePublicService(args[1], service); errEnvelope != nil {
+			return ParseResult{Envelope: errEnvelope, Code: ExitParseError}
+		}
+		return ParseResult{
+			Route: &Route{
+				Resource: "service",
+				Kind:     KindService,
+				Tokens:   append([]string(nil), args...),
+				Action:   args[1],
+				Subject:  service,
+			},
+		}
+	case "secrets":
+		return ParseResult{
+			Envelope: Error(nil,
+				"retired_namespace",
+				"'service secrets' is retired",
+				"use: secret set <scope> <name> [value] | secret list <scope> | secret delete <scope> <name>",
+			),
+			Code: ExitParseError,
+		}
+	default:
+		return ParseResult{
+			Envelope: Error(nil,
+				"parse_error",
+				fmt.Sprintf("unknown service command '%s'", args[1]),
+				"use: service list | service status <service> | service deploy <service> | service restart <service> | service logs <service>",
+			),
+			Code: ExitParseError,
+		}
+	}
+}
+
+func parseRuntimeOpenClaw(args []string) ParseResult {
 	if len(args) < 2 {
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("missing command for environment '%s'", args[0]),
-				fmt.Sprintf("use: %s reload|checkpoint|skill deploy <skill>|skill list|skill remove <skill>|plugin install <package>|plugin list|plugin remove <plugin>|openclaw <command>|secrets <command>", args[0]),
+				fmt.Sprintf("use: %s openclaw <command>", args[0]),
 			),
 			Code: ExitParseError,
 		}
@@ -555,189 +597,65 @@ func parseRuntime(args []string) ParseResult {
 		Runtime:     runtimeMappings[args[0]],
 	}
 
-	switch args[1] {
-	case "reload", "checkpoint":
-		if len(args) != 2 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("unexpected arguments after '%s %s'", args[0], args[1]),
-					fmt.Sprintf("use: %s %s", args[0], args[1]),
-				),
-				Code: ExitParseError,
-			}
-		}
-		route.Kind = KindRuntimeAction
-		route.Action = args[1]
-		return ParseResult{Route: route}
-	case "skill":
-		return parseRuntimeSkill(route, args)
-	case "plugin":
-		return parseRuntimePlugin(route, args)
-	case "openclaw":
-		if len(args) < 3 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("missing native OpenClaw command for '%s'", args[0]),
-					fmt.Sprintf("use: %s openclaw <command>", args[0]),
-				),
-				Code: ExitParseError,
-			}
-		}
-		route.Kind = KindRuntimeNative
-		route.Action = "openclaw"
-		route.NativeArgs = normalizeRuntimeNativeArgs(args[2:])
-		return ParseResult{Route: route}
-	case "secrets":
-		return parseScopedSecrets(args[0], args)
-	default:
+	if args[1] != "openclaw" {
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown environment command '%s'", args[1]),
-				fmt.Sprintf("use: %s reload|checkpoint|skill deploy <skill>|skill list|skill remove <skill>|plugin install <package>|plugin list|plugin remove <plugin>|openclaw <command>|secrets <command>", args[0]),
+				fmt.Sprintf("use: %s openclaw <command>", args[0]),
 			),
 			Code: ExitParseError,
 		}
 	}
-}
-
-func parseRuntimeSkill(route *Route, args []string) ParseResult {
-	switch args[2] {
-	case "list":
-		if len(args) != 3 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("unexpected arguments after '%s skill list'", args[0]),
-					fmt.Sprintf("use: %s skill list", args[0]),
-				),
-				Code: ExitParseError,
-			}
-		}
-		route.Kind = KindRuntimeSkill
-		route.Action = "list"
-		return ParseResult{Route: route}
-	case "deploy", "remove", "rollback":
-		if len(args) != 4 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("invalid skill command for environment '%s'", args[0]),
-					fmt.Sprintf("use: %s skill deploy <skill> | %s skill list | %s skill remove <skill>", args[0], args[0], args[0]),
-				),
-				Code: ExitParseError,
-			}
-		}
-		route.Kind = KindRuntimeSkill
-		if args[2] == "rollback" {
-			route.Action = "remove"
-		} else {
-			route.Action = args[2]
-		}
-		route.Subject = args[3]
-		return ParseResult{Route: route}
-	default:
-		return ParseResult{
-			Envelope: Error(nil,
-				"parse_error",
-				fmt.Sprintf("unknown skill action '%s'", args[2]),
-				fmt.Sprintf("use: %s skill deploy <skill> | %s skill list | %s skill remove <skill>", args[0], args[0], args[0]),
-			),
-			Code: ExitParseError,
-		}
-	}
-}
-
-func parseRuntimePlugin(route *Route, args []string) ParseResult {
 	if len(args) < 3 {
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
-				fmt.Sprintf("missing plugin action for environment '%s'", args[0]),
-				fmt.Sprintf("use: %s plugin install <package> | %s plugin list | %s plugin remove <plugin>", args[0], args[0], args[0]),
+				fmt.Sprintf("missing native OpenClaw command for '%s'", args[0]),
+				fmt.Sprintf("use: %s openclaw <command>", args[0]),
 			),
 			Code: ExitParseError,
 		}
 	}
 
-	switch args[2] {
-	case "list":
-		if len(args) != 3 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("unexpected arguments after '%s plugin list'", args[0]),
-					fmt.Sprintf("use: %s plugin list", args[0]),
-				),
-				Code: ExitParseError,
-			}
-		}
-		route.Kind = KindRuntimePlugin
-		route.Action = "list"
-		return ParseResult{Route: route}
-	case "install", "remove":
-		if len(args) != 4 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("invalid plugin command for environment '%s'", args[0]),
-					fmt.Sprintf("use: %s plugin install <package> | %s plugin list | %s plugin remove <plugin>", args[0], args[0], args[0]),
-				),
-				Code: ExitParseError,
-			}
-		}
-		route.Kind = KindRuntimePlugin
-		route.Action = args[2]
-		route.Subject = args[3]
-		return ParseResult{Route: route}
-	default:
-		return ParseResult{
-			Envelope: Error(nil,
-				"parse_error",
-				fmt.Sprintf("unknown plugin action '%s'", args[2]),
-				fmt.Sprintf("use: %s plugin install <package> | %s plugin list | %s plugin remove <plugin>", args[0], args[0], args[0]),
-			),
-			Code: ExitParseError,
-		}
-	}
+	route.Kind = KindRuntimeNative
+	route.Action = "openclaw"
+	route.NativeArgs = normalizeRuntimeNativeArgs(args[2:])
+	return ParseResult{Route: route}
 }
 
-func parseServiceScope(args []string) ParseResult {
-	if len(args) < 2 || args[1] != "secrets" {
-		return ParseResult{
-			Envelope: Error(nil,
-				"retired_namespace",
-				"'service' is only valid for scoped secrets commands",
-				"use: service secrets set <NAME> | service secrets list | service secrets delete <NAME>",
-			),
-			Code: ExitParseError,
-		}
-	}
-	return parseScopedSecrets("service", args)
-}
-
-func parseScopedSecrets(scope string, args []string) ParseResult {
+func parseSecret(args []string) ParseResult {
 	if len(args) < 3 {
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
-				fmt.Sprintf("missing secrets command for scope '%s'", scope),
-				fmt.Sprintf("use: %s secrets set <NAME> | %s secrets list | %s secrets delete <NAME>", scope, scope, scope),
+				"missing secret command or scope",
+				"use: secret set <scope> <name> [value] | secret list <scope> | secret delete <scope> <name>",
 			),
 			Code: ExitParseError,
 		}
 	}
 
-	switch args[2] {
+	scope := strings.TrimSpace(args[2])
+	if _, ok := secretScopes[scope]; !ok {
+		return ParseResult{
+			Envelope: Error(nil,
+				"parse_error",
+				fmt.Sprintf("unknown secret scope '%s'", scope),
+				"use one of: service, test, prod",
+			),
+			Code: ExitParseError,
+		}
+	}
+
+	switch args[1] {
 	case "list":
 		if len(args) != 3 {
 			return ParseResult{
 				Envelope: Error(nil,
 					"parse_error",
-					fmt.Sprintf("unexpected arguments after '%s secrets list'", scope),
-					fmt.Sprintf("use: %s secrets list", scope),
+					"unexpected arguments after 'secret list <scope>'",
+					"use: secret list <scope>",
 				),
 				Code: ExitParseError,
 			}
@@ -750,34 +668,19 @@ func parseScopedSecrets(scope string, args []string) ParseResult {
 				Action:   "list",
 			},
 		}
-	case "set", "delete":
+	case "set":
 		if len(args) < 4 {
 			return ParseResult{
 				Envelope: Error(nil,
 					"parse_error",
-					fmt.Sprintf("invalid %s secrets %s command", scope, args[2]),
-					func() string {
-						if args[2] == "set" {
-							return fmt.Sprintf("use: %s secrets set <NAME> [VALUE]", scope)
-						}
-						return fmt.Sprintf("use: %s secrets delete <NAME>", scope)
-					}(),
+					"invalid secret set command",
+					"use: secret set <scope> <name> [value]",
 				),
 				Code: ExitParseError,
 			}
 		}
 		nativeArgs := []string(nil)
-		if args[2] == "delete" && len(args) != 4 {
-			return ParseResult{
-				Envelope: Error(nil,
-					"parse_error",
-					fmt.Sprintf("invalid %s secrets delete command", scope),
-					fmt.Sprintf("use: %s secrets delete <NAME>", scope),
-				),
-				Code: ExitParseError,
-			}
-		}
-		if args[2] == "set" && len(args) >= 5 {
+		if len(args) >= 5 {
 			nativeArgs = []string{strings.Join(args[4:], " ")}
 		}
 		return ParseResult{
@@ -785,17 +688,37 @@ func parseScopedSecrets(scope string, args []string) ParseResult {
 				Resource:   scope,
 				Kind:       KindScopedSecrets,
 				Tokens:     append([]string(nil), args...),
-				Action:     args[2],
+				Action:     "set",
 				Subject:    args[3],
 				NativeArgs: nativeArgs,
+			},
+		}
+	case "delete":
+		if len(args) != 4 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					"invalid secret delete command",
+					"use: secret delete <scope> <name>",
+				),
+				Code: ExitParseError,
+			}
+		}
+		return ParseResult{
+			Route: &Route{
+				Resource: scope,
+				Kind:     KindScopedSecrets,
+				Tokens:   append([]string(nil), args...),
+				Action:   "delete",
+				Subject:  args[3],
 			},
 		}
 	default:
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
-				fmt.Sprintf("unknown secrets command '%s'", args[2]),
-				fmt.Sprintf("use: %s secrets set <NAME> | %s secrets list | %s secrets delete <NAME>", scope, scope, scope),
+				fmt.Sprintf("unknown secret command '%s'", args[1]),
+				"use: secret set <scope> <name> [value] | secret list <scope> | secret delete <scope> <name>",
 			),
 			Code: ExitParseError,
 		}
@@ -891,8 +814,12 @@ func WriteJSON(out io.Writer, payload any) error {
 	return encoder.Encode(payload)
 }
 
-func WriteHelp(out io.Writer) error {
-	_, err := io.WriteString(out, strings.TrimLeft(helpText, "\n"))
+func WriteHelp(out io.Writer, topic string) error {
+	text, ok := helpTextByTopic[topic]
+	if !ok {
+		text = helpTextByTopic["global"]
+	}
+	_, err := io.WriteString(out, strings.TrimLeft(text, "\n"))
 	return err
 }
 
@@ -946,47 +873,138 @@ func isHelpFlag(value string) bool {
 	return value == "-h" || value == "--help"
 }
 
-const helpText = `
+func normalizeHelpTopic(value string) string {
+	switch strings.TrimSpace(value) {
+	case "bootstrap", "gateway", "service", "test", "prod", "ollama", "secret":
+		return strings.TrimSpace(value)
+	default:
+		return ""
+	}
+}
+
+func retiredNamespaceResult(resource, reason string) ParseResult {
+	return ParseResult{
+		Envelope: Error(nil,
+			"retired_namespace",
+			fmt.Sprintf("'%s' is a retired top-level namespace", resource),
+			reason,
+		),
+		Code: ExitParseError,
+	}
+}
+
+func validatePublicService(action, service string) *Envelope {
+	if _, ok := publicServices[service]; !ok {
+		return Error(nil,
+			"parse_error",
+			fmt.Sprintf("unknown service '%s'", service),
+			"use one of: gateway, caddy, ollama, test, prod",
+		)
+	}
+	if service == "gateway" && (action == "deploy" || action == "restart") {
+		return Error(nil,
+			"parse_error",
+			fmt.Sprintf("service %s gateway is not supported", action),
+			"use: gateway update",
+		)
+	}
+	return nil
+}
+
+var helpTextByTopic = map[string]string{
+	"global": `
 moltbox <resource> <command>
 
 Resources:
+  bootstrap
+    gateway
+
   gateway
     status
     update
     logs
     mcp-stdio
-    token create <name>
-    token list
-    token delete <name>
-    token rotate <name>
-    service deploy <service>
-    service restart <service>
-    service status <service>
-    docker ping
-    docker run <image>
-
-  dev|test|prod
-    reload
-    checkpoint
-    skill deploy <skill>
-    skill list
-    skill remove <skill>
-    plugin install <package>
-    plugin list
-    plugin remove <plugin>
-    openclaw <command>
-    secrets set <name> [value]
-    secrets list
-    secrets delete <name>
 
   service
-    secrets set <name> [value]
-    secrets list
-    secrets delete <name>
+    list
+    status <service>
+    deploy <service>
+    restart <service>
+    logs <service>
 
-  ollama|opensearch|caddy
+  test|prod
+    openclaw <command>
+
+  ollama
     <native command>
 
-Retired namespaces fail explicitly:
-  runtime, skill, tools, host, openclaw-dev, openclaw-test, openclaw-prod
-`
+  secret
+    set <scope> <name> [value]
+    list <scope>
+    delete <scope> <name>
+
+Removed or retired surfaces fail explicitly:
+  dev, opensearch, caddy, runtime, skill, plugin, tools, host,
+  openclaw-dev, openclaw-test, openclaw-prod, gateway service, gateway docker
+`,
+	"bootstrap": `
+moltbox bootstrap gateway
+
+Bootstrap:
+  gateway   Start or recover the local gateway control plane
+`,
+	"gateway": `
+moltbox gateway <command>
+
+Commands:
+  status
+  update
+  logs
+  mcp-stdio
+`,
+	"service": `
+moltbox service <command>
+
+Commands:
+  list
+  status <service>
+  deploy <service>
+  restart <service>
+  logs <service>
+
+Services:
+  gateway
+  caddy
+  ollama
+  test
+  prod
+`,
+	"test": `
+moltbox test openclaw <command>
+
+The test runtime only exposes native OpenClaw passthrough on the public CLI.
+`,
+	"prod": `
+moltbox prod openclaw <command>
+
+The prod runtime only exposes native OpenClaw passthrough on the public CLI.
+`,
+	"ollama": `
+moltbox ollama <native command>
+
+This is a thin passthrough to the native Ollama CLI inside the managed service.
+`,
+	"secret": `
+moltbox secret <command>
+
+Commands:
+  set <scope> <name> [value]
+  list <scope>
+  delete <scope> <name>
+
+Scopes:
+  service
+  test
+  prod
+`,
+}

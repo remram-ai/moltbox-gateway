@@ -31,30 +31,24 @@ func (c *HTTPClient) Execute(route *cli.Route, secretValue string) ([]byte, erro
 	switch {
 	case route.Kind == cli.KindGateway && route.Action == "status":
 		return c.get("/status")
-	case route.Kind == cli.KindGatewayDocker && route.Action == "ping":
-		return c.get("/docker/ping")
-	case route.Kind == cli.KindGatewayDocker && route.Action == "run":
-		return c.post("/docker/run", cli.DockerRunRequest{Image: route.Subject})
-	case route.Kind == cli.KindGatewayService && route.Action == "status":
+	case route.Kind == cli.KindService && route.Action == "list":
+		return c.get("/service/list")
+	case route.Kind == cli.KindService && route.Action == "status":
 		query := url.Values{}
 		query.Set("service", route.Subject)
 		return c.get("/service/status?" + query.Encode())
-	case route.Kind == cli.KindGatewayService && route.Action == "deploy":
+	case route.Kind == cli.KindService && route.Action == "deploy":
 		return c.post("/service/deploy", cli.RouteRequest{Route: route, Service: route.Subject})
-	case route.Kind == cli.KindGatewayService && route.Action == "restart":
+	case route.Kind == cli.KindService && route.Action == "restart":
 		return c.post("/service/restart", cli.RouteRequest{Route: route, Service: route.Subject})
+	case route.Kind == cli.KindService && route.Action == "logs":
+		query := url.Values{}
+		query.Set("service", route.Subject)
+		return c.get("/service/logs?" + query.Encode())
 	case route.Kind == cli.KindGateway && route.Action == "logs":
 		return c.get("/logs")
 	case route.Kind == cli.KindGateway && route.Action == "update":
 		return c.post("/update", cli.RouteRequest{Route: route, Service: "gateway"})
-	case route.Kind == cli.KindGatewayToken && route.Action == "create":
-		return c.post("/token/create", cli.RouteRequest{Route: route})
-	case route.Kind == cli.KindGatewayToken && route.Action == "list":
-		return c.get("/token/list")
-	case route.Kind == cli.KindGatewayToken && route.Action == "delete":
-		return c.post("/token/delete", cli.RouteRequest{Route: route})
-	case route.Kind == cli.KindGatewayToken && route.Action == "rotate":
-		return c.post("/token/rotate", cli.RouteRequest{Route: route})
 	case route.Kind == cli.KindRuntimeAction && route.Action == "reload":
 		return c.post("/runtime/reload", cli.RouteRequest{Route: route})
 	case route.Kind == cli.KindRuntimeAction && route.Action == "checkpoint":

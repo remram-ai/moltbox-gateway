@@ -1,11 +1,11 @@
 package orchestrator
 
 import (
-	"crypto/sha256"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -53,6 +53,14 @@ type ServiceDefinition struct {
 	RuntimeRequired bool
 	BuildOnDeploy   bool
 	SkipPull        bool
+}
+
+var managedPublicServices = []string{
+	"gateway",
+	"caddy",
+	"ollama",
+	"test",
+	"prod",
 }
 
 func NewManager(cfg config.Config, inspector ContainerInspector, runner command.Runner, secretResolver SecretResolver) *Manager {
@@ -209,11 +217,11 @@ func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.Serv
 		Result:          "success",
 		Operation:       "gateway_update",
 		Details: map[string]string{
-			"source":     source,
-			"checksum":   checksum,
-			"component":  "gateway",
-			"history":    defaultApplianceHistoryPath,
-			"cli_path":   cliPath,
+			"source":      source,
+			"checksum":    checksum,
+			"component":   "gateway",
+			"history":     defaultApplianceHistoryPath,
+			"cli_path":    cliPath,
 			"config_path": cliConfigPath,
 		},
 	}
@@ -477,6 +485,41 @@ func (m *Manager) RestartService(ctx context.Context, route *cli.Route, service 
 	}, nil
 }
 
+func (m *Manager) ServiceList(ctx context.Context, route *cli.Route) (cli.ServiceListResult, error) {
+	items := make([]cli.ServiceListItem, 0, len(managedPublicServices))
+	for _, service := range managedPublicServices {
+		statusRoute := &cli.Route{
+			Resource: "service",
+			Kind:     cli.KindService,
+			Action:   "status",
+			Subject:  service,
+		}
+		status, err := m.ServiceStatus(ctx, statusRoute, service)
+		if err != nil {
+			return cli.ServiceListResult{}, err
+		}
+
+		item := cli.ServiceListItem{
+			Service:        service,
+			CanonicalName:  canonicalServiceName(service),
+			ComposeProject: status.ComposeProject,
+			ContainerName:  status.ContainerName,
+			Status:         status.Status,
+			Running:        status.Running,
+		}
+		if len(status.Containers) > 0 {
+			item.Health = status.Containers[0].Health
+		}
+		items = append(items, item)
+	}
+
+	return cli.ServiceListResult{
+		OK:       true,
+		Route:    route,
+		Services: items,
+	}, nil
+}
+
 func (m *Manager) ServiceStatus(ctx context.Context, route *cli.Route, service string) (cli.ServiceStatusResult, error) {
 	canonicalService := canonicalServiceName(service)
 	definition, err := m.LoadServiceDefinition(canonicalService)
@@ -503,6 +546,34 @@ func (m *Manager) ServiceStatus(ctx context.Context, route *cli.Route, service s
 		result.Running = containers[0].Running
 	}
 	return result, nil
+}
+
+func (m *Manager) ServiceLogs(ctx context.Context, route *cli.Route, service string) (cli.CommandResult, error) {
+	canonicalService := canonicalServiceName(service)
+	definition, err := m.LoadServiceDefinition(canonicalService)
+	if err != nil {
+		return cli.CommandResult{}, err
+	}
+	if len(definition.ContainerNames) == 0 {
+		return cli.CommandResult{}, fmt.Errorf("service %s has no containers", service)
+	}
+
+	containerName := definition.ContainerNames[0]
+	commandArgs := []string{"logs", "--tail", "200", containerName}
+	result, err := m.runner.Run(ctx, "", "docker", commandArgs...)
+	if err != nil {
+		return cli.CommandResult{}, err
+	}
+
+	return cli.CommandResult{
+		OK:            result.ExitCode == 0,
+		Route:         route,
+		ContainerName: containerName,
+		Command:       append([]string{"docker"}, commandArgs...),
+		Stdout:        result.Stdout,
+		Stderr:        result.Stderr,
+		ExitCode:      result.ExitCode,
+	}, nil
 }
 
 func (m *Manager) GatewayLogs(ctx context.Context, route *cli.Route) (cli.CommandResult, error) {
@@ -1008,13 +1079,7 @@ func parseBool(value string) bool {
 }
 
 func defaultHostCLIConfigPath(cliPath string) string {
-	cleaned := filepath.Clean(cliPath)
-	suffix := filepath.Join(".local", "bin", "moltbox")
-	if strings.HasSuffix(cleaned, suffix) {
-		prefix := strings.TrimSuffix(cleaned, suffix)
-		return filepath.Join(prefix, ".config", "moltbox", "config.yaml")
-	}
-	return filepath.Join(filepath.Dir(cleaned), "moltbox-config.yaml")
+	return config.DefaultConfigPath
 }
 
 func uniqueMountRoots(paths ...string) []string {

@@ -46,12 +46,13 @@ Current implementation posture:
 - the long-running gateway server runs in a Docker container named `gateway`
 - builds tag the gateway image as `moltbox-gateway:latest`
 - the host CLI talks directly to the gateway over `http://127.0.0.1:7460`
-- the gateway orchestrates service deploy, restart, runtime reload, runtime checkpoint, managed skill deploy and rollback, scoped secrets, and MCP tokens
+- the public CLI surface is intentionally lightweight: `gateway`, `service`, `test openclaw`, `prod openclaw`, `ollama`, and `secret`
+- the gateway remains the service-plane orchestrator and still carries some legacy internal runtime routes during the transition
+- scoped secrets and MCP tokens are still gateway-owned
 
 Extra implementation commands currently exist for bootstrap and diagnostics:
 
-- `moltbox gateway docker ping`
-- `moltbox gateway docker run <image>`
+- `moltbox bootstrap gateway` currently exists as a transition stub and is not fully implemented yet
 - `moltbox gateway mcp-stdio`
 
 Future service images and orchestration flows should come from `moltbox-services`, with gateway treated as a service there.

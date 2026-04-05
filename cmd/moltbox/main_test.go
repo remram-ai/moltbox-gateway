@@ -12,7 +12,7 @@ import (
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
 
-func TestCLIForwardsToGateway(t *testing.T) {
+func TestCLIForwardsLightweightPublicSurface(t *testing.T) {
 	testCases := []struct {
 		name       string
 		args       []string
@@ -36,90 +36,6 @@ func TestCLIForwardsToGateway(t *testing.T) {
 					Version:       cli.Version,
 					ListenAddress: ":7460",
 					DockerSocket:  cli.DefaultDockerSocket,
-				})
-			},
-		},
-		{
-			name:       "gateway docker ping",
-			args:       []string{"gateway", "docker", "ping"},
-			wantMethod: http.MethodGet,
-			wantPath:   "/docker/ping",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				_ = json.NewEncoder(writer).Encode(cli.DockerPingResult{
-					OK:            true,
-					Route:         &cli.Route{Resource: "gateway", Kind: cli.KindGatewayDocker, Action: "ping", Subject: "docker"},
-					DockerVersion: "29.3.0",
-				})
-			},
-		},
-		{
-			name:       "gateway docker run",
-			args:       []string{"gateway", "docker", "run", "hello-world"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/docker/run",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.DockerRunRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				if payload.Image != "hello-world" {
-					t.Fatalf("payload.image = %q, want hello-world", payload.Image)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.DockerRunResult{
-					OK:            true,
-					Route:         &cli.Route{Resource: "gateway", Kind: cli.KindGatewayDocker, Action: "run", Subject: "hello-world"},
-					Image:         "hello-world",
-					ContainerID:   "abc123",
-					ContainerName: "hello-world",
-				})
-			},
-		},
-		{
-			name:       "gateway service deploy",
-			args:       []string{"gateway", "service", "deploy", "opensearch"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/service/deploy",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				if payload.Service != "opensearch" {
-					t.Fatalf("payload.service = %q, want opensearch", payload.Service)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.ServiceDeployResult{
-					OK:      true,
-					Route:   &cli.Route{Resource: "gateway", Kind: cli.KindGatewayService, Action: "deploy", Subject: "opensearch"},
-					Service: "opensearch",
-				})
-			},
-		},
-		{
-			name:       "gateway service restart",
-			args:       []string{"gateway", "service", "restart", "opensearch"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/service/restart",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				if payload.Service != "opensearch" {
-					t.Fatalf("payload.service = %q, want opensearch", payload.Service)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.ServiceActionResult{
-					OK:      true,
-					Route:   &cli.Route{Resource: "gateway", Kind: cli.KindGatewayService, Action: "restart", Subject: "opensearch"},
-					Service: "opensearch",
-					Action:  "restart",
 				})
 			},
 		},
@@ -148,203 +64,120 @@ func TestCLIForwardsToGateway(t *testing.T) {
 			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
-				_ = json.NewEncoder(writer).Encode(cli.ServiceDeployResult{
+				_ = json.NewEncoder(writer).Encode(cli.ServiceActionResult{
 					OK:      true,
 					Route:   &cli.Route{Resource: "gateway", Kind: cli.KindGateway, Action: "update", Subject: "gateway"},
 					Service: "gateway",
+					Action:  "update",
 				})
 			},
 		},
 		{
-			name:       "runtime action",
-			args:       []string{"dev", "reload"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/reload",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				if payload.Route == nil || payload.Route.Environment != "dev" {
-					t.Fatalf("payload.route = %#v, want dev runtime route", payload.Route)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.ServiceActionResult{
-					OK:      true,
-					Route:   payload.Route,
-					Service: "openclaw-dev",
-					Action:  "reload",
-				})
-			},
-		},
-		{
-			name:       "runtime checkpoint",
-			args:       []string{"dev", "checkpoint"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/checkpoint",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.RuntimeCheckpointResult{
-					OK:            true,
-					Route:         payload.Route,
-					Runtime:       "openclaw-dev",
-					CheckpointID:  "checkpoint-123",
-					Image:         "moltbox-runtime:openclaw-dev-checkpoint-123",
-					SnapshotDir:   "/srv/moltbox-state/runtime-baselines/openclaw-dev/checkpoint-123/snapshot",
-					ReplayCleared: true,
-				})
-			},
-		},
-		{
-			name:       "runtime skill deploy",
-			args:       []string{"dev", "skill", "deploy", "together"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/skill/deploy",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.RuntimeSkillResult{
-					OK:             true,
-					Route:          payload.Route,
-					Runtime:        "openclaw-dev",
-					Skill:          "together",
-					CanonicalSkill: "together-escalation",
-					Action:         "deploy",
-					DeploymentID:   "deploy-123",
-					EventID:        "event-123",
-					PackageDir:     "/srv/moltbox-state/deploy/runtime/openclaw-dev/packages/event-123",
-					ReplayCount:    1,
-				})
-			},
-		},
-		{
-			name:       "runtime skill list",
-			args:       []string{"dev", "skill", "list"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/skill/list",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.CommandResult{
-					OK:            true,
-					Route:         payload.Route,
-					ContainerName: "openclaw-dev",
-					ExitCode:      0,
-					Stdout:        "together-escalation\n",
-				})
-			},
-		},
-		{
-			name:       "runtime skill remove",
-			args:       []string{"dev", "skill", "remove", "together"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/skill/remove",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.RuntimeSkillResult{
-					OK:             true,
-					Route:          payload.Route,
-					Runtime:        "openclaw-dev",
-					Skill:          "together",
-					CanonicalSkill: "together-escalation",
-					Action:         "remove",
-					DeploymentID:   "deploy-remove-123",
-					EventID:        "event-123",
-				})
-			},
-		},
-		{
-			name:       "runtime plugin install",
-			args:       []string{"dev", "plugin", "install", "moltbox-telemetry"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/runtime/dev/plugins/install",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				var payload cli.RouteRequest
-				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-					t.Fatalf("decode request: %v", err)
-				}
-				_ = json.NewEncoder(writer).Encode(cli.RuntimePluginResult{
-					OK:           true,
-					Route:        payload.Route,
-					Runtime:      "openclaw-dev",
-					Plugin:       "moltbox-telemetry",
-					Package:      "moltbox-telemetry@1.2.0",
-					Version:      "1.2.0",
-					Digest:       "sha256:digest",
-					Source:       "npm",
-					Action:       "install",
-					DeploymentID: "deploy-plugin-123",
-					EventID:      "event-plugin-123",
-					PackageDir:   "/srv/moltbox-state/deploy/runtime/openclaw-dev/packages/event-plugin-123",
-					ReplayCount:  1,
-				})
-			},
-		},
-		{
-			name:       "runtime plugin list",
-			args:       []string{"dev", "plugin", "list"},
+			name:       "service list",
+			args:       []string{"service", "list"},
 			wantMethod: http.MethodGet,
-			wantPath:   "/runtime/dev/plugins",
+			wantPath:   "/service/list",
 			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
-				_ = json.NewEncoder(writer).Encode(cli.RuntimePluginListResult{
-					OK:      true,
-					Route:   &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "list", Environment: "dev", Runtime: "openclaw-dev"},
-					Runtime: "openclaw-dev",
-					Plugins: []cli.RuntimePluginInfo{
-						{Plugin: "moltbox-telemetry", Package: "moltbox-telemetry@1.2.0", Version: "1.2.0", Digest: "sha256:digest", Source: "npm"},
+				_ = json.NewEncoder(writer).Encode(cli.ServiceListResult{
+					OK:    true,
+					Route: &cli.Route{Resource: "service", Kind: cli.KindService, Action: "list"},
+					Services: []cli.ServiceListItem{
+						{Service: "gateway", CanonicalName: "gateway", Running: true, Health: "healthy"},
+						{Service: "test", CanonicalName: "openclaw-test", Running: true, Health: "healthy"},
 					},
 				})
 			},
 		},
 		{
-			name:       "runtime plugin remove",
-			args:       []string{"dev", "plugin", "remove", "moltbox-telemetry"},
-			wantMethod: http.MethodDelete,
-			wantPath:   "/runtime/dev/plugins/moltbox-telemetry",
+			name:       "service status",
+			args:       []string{"service", "status", "test"},
+			wantMethod: http.MethodGet,
+			wantPath:   "/service/status",
 			wantCode:   cli.ExitOK,
 			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
 				t.Helper()
-				_ = json.NewEncoder(writer).Encode(cli.RuntimePluginResult{
-					OK:           true,
-					Route:        &cli.Route{Resource: "dev", Kind: cli.KindRuntimePlugin, Action: "remove", Subject: "moltbox-telemetry", Environment: "dev", Runtime: "openclaw-dev"},
-					Runtime:      "openclaw-dev",
-					Plugin:       "moltbox-telemetry",
-					Package:      "moltbox-telemetry@1.2.0",
-					Version:      "1.2.0",
-					Digest:       "sha256:digest",
-					Source:       "npm",
-					Action:       "remove",
-					DeploymentID: "deploy-plugin-remove-123",
-					EventID:      "event-plugin-123",
+				if got := request.URL.Query().Get("service"); got != "test" {
+					t.Fatalf("query service = %q, want test", got)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.ServiceStatusResult{
+					OK:      true,
+					Route:   &cli.Route{Resource: "service", Kind: cli.KindService, Action: "status", Subject: "test"},
+					Service: "test",
+					Status:  "running",
+					Running: true,
 				})
 			},
 		},
 		{
-			name:       "runtime openclaw passthrough",
-			args:       []string{"dev", "openclaw", "plugins", "list"},
+			name:       "service deploy",
+			args:       []string{"service", "deploy", "test"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/service/deploy",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if payload.Service != "test" {
+					t.Fatalf("payload.service = %q, want test", payload.Service)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.ServiceDeployResult{
+					OK:      true,
+					Route:   payload.Route,
+					Service: "test",
+				})
+			},
+		},
+		{
+			name:       "service restart",
+			args:       []string{"service", "restart", "caddy"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/service/restart",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if payload.Service != "caddy" {
+					t.Fatalf("payload.service = %q, want caddy", payload.Service)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.ServiceActionResult{
+					OK:      true,
+					Route:   payload.Route,
+					Service: "caddy",
+					Action:  "restart",
+				})
+			},
+		},
+		{
+			name:       "service logs",
+			args:       []string{"service", "logs", "prod"},
+			wantMethod: http.MethodGet,
+			wantPath:   "/service/logs",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				if got := request.URL.Query().Get("service"); got != "prod" {
+					t.Fatalf("query service = %q, want prod", got)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.CommandResult{
+					OK:            true,
+					Route:         &cli.Route{Resource: "service", Kind: cli.KindService, Action: "logs", Subject: "prod"},
+					ContainerName: "openclaw-prod",
+					ExitCode:      0,
+					Stdout:        "prod log line",
+				})
+			},
+		},
+		{
+			name:       "test openclaw passthrough",
+			args:       []string{"test", "openclaw", "health", "--json"},
 			wantMethod: http.MethodPost,
 			wantPath:   "/runtime/openclaw",
 			wantCode:   cli.ExitOK,
@@ -354,12 +187,39 @@ func TestCLIForwardsToGateway(t *testing.T) {
 				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 					t.Fatalf("decode request: %v", err)
 				}
+				if payload.Route == nil || payload.Route.Environment != "test" || payload.Route.Runtime != "openclaw-test" {
+					t.Fatalf("payload.route = %#v, want test runtime route", payload.Route)
+				}
 				_ = json.NewEncoder(writer).Encode(cli.CommandResult{
 					OK:            true,
 					Route:         payload.Route,
-					ContainerName: "openclaw-dev",
+					ContainerName: "openclaw-test",
 					ExitCode:      0,
-					Stdout:        "plugin-a\nplugin-b\n",
+					Stdout:        `{"ok":true}`,
+				})
+			},
+		},
+		{
+			name:       "prod openclaw passthrough",
+			args:       []string{"prod", "openclaw", "health", "--json"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/runtime/openclaw",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if payload.Route == nil || payload.Route.Environment != "prod" || payload.Route.Runtime != "openclaw-prod" {
+					t.Fatalf("payload.route = %#v, want prod runtime route", payload.Route)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.CommandResult{
+					OK:            true,
+					Route:         payload.Route,
+					ContainerName: "openclaw-prod",
+					ExitCode:      0,
+					Stdout:        `{"ok":true}`,
 				})
 			},
 		},
@@ -375,18 +235,21 @@ func TestCLIForwardsToGateway(t *testing.T) {
 				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 					t.Fatalf("decode request: %v", err)
 				}
+				if payload.Route == nil || payload.Route.Resource != "ollama" || payload.Route.Kind != cli.KindServiceNative {
+					t.Fatalf("payload.route = %#v, want ollama passthrough", payload.Route)
+				}
 				_ = json.NewEncoder(writer).Encode(cli.CommandResult{
 					OK:            true,
 					Route:         payload.Route,
 					ContainerName: "ollama",
 					ExitCode:      0,
-					Stdout:        "qwen3:8b\n",
+					Stdout:        "mistral:7b-instruct-32k\n",
 				})
 			},
 		},
 		{
 			name:       "scoped secrets list",
-			args:       []string{"dev", "secrets", "list"},
+			args:       []string{"secret", "list", "test"},
 			wantMethod: http.MethodPost,
 			wantPath:   "/execute",
 			wantCode:   cli.ExitOK,
@@ -396,25 +259,22 @@ func TestCLIForwardsToGateway(t *testing.T) {
 				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 					t.Fatalf("decode request: %v", err)
 				}
-				if payload.Route == nil || payload.Route.Kind != cli.KindScopedSecrets || payload.Route.Resource != "dev" || payload.Route.Action != "list" {
-					t.Fatalf("payload.route = %#v, want dev scoped secrets list route", payload.Route)
-				}
-				if payload.SecretValue != "" {
-					t.Fatalf("payload.secret_value = %q, want empty", payload.SecretValue)
+				if payload.Route == nil || payload.Route.Kind != cli.KindScopedSecrets || payload.Route.Resource != "test" || payload.Route.Action != "list" {
+					t.Fatalf("payload.route = %#v, want test scoped secrets list route", payload.Route)
 				}
 				_ = json.NewEncoder(writer).Encode(cli.SecretListResult{
 					OK:    true,
 					Route: payload.Route,
-					Scope: "dev",
+					Scope: "test",
 					Secrets: []cli.SecretListItem{
-						{Scope: "dev", Name: "TOGETHER_API_KEY"},
+						{Scope: "test", Name: "TOGETHER_API_KEY"},
 					},
 				})
 			},
 		},
 		{
 			name:       "scoped secrets set inline value",
-			args:       []string{"dev", "secrets", "set", "TOGETHER_API_KEY", "inline-secret"},
+			args:       []string{"secret", "set", "prod", "TOGETHER_API_KEY", "inline-secret"},
 			wantMethod: http.MethodPost,
 			wantPath:   "/execute",
 			wantCode:   cli.ExitOK,
@@ -433,7 +293,7 @@ func TestCLIForwardsToGateway(t *testing.T) {
 				_ = json.NewEncoder(writer).Encode(cli.SecretSetResult{
 					OK:     true,
 					Route:  payload.Route,
-					Scope:  "dev",
+					Scope:  "prod",
 					Name:   "TOGETHER_API_KEY",
 					Stored: true,
 				})
@@ -462,7 +322,6 @@ func TestCLIForwardsToGateway(t *testing.T) {
 			if code != testCase.wantCode {
 				t.Fatalf("exit code = %d, want %d", code, testCase.wantCode)
 			}
-
 			if output.Len() == 0 {
 				t.Fatal("expected gateway response output")
 			}
@@ -470,14 +329,32 @@ func TestCLIForwardsToGateway(t *testing.T) {
 	}
 }
 
+func TestBootstrapGatewayReturnsNotImplemented(t *testing.T) {
+	t.Parallel()
+
+	var output strings.Builder
+	code := run([]string{"bootstrap", "gateway"}, &output, ioDiscard{})
+	if code != cli.ExitNotImplemented {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitNotImplemented)
+	}
+
+	var payload cli.Envelope
+	if err := json.Unmarshal([]byte(output.String()), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.ErrorType != "not_implemented" {
+		t.Fatalf("error_type = %q, want not_implemented", payload.ErrorType)
+	}
+}
+
 func TestRetiredNamespacesFailExplicitly(t *testing.T) {
 	t.Parallel()
 
 	retired := []string{
+		"dev",
 		"runtime",
 		"skill",
-		"tools",
-		"host",
+		"plugin",
 		"openclaw-dev",
 		"openclaw-test",
 		"openclaw-prod",
@@ -500,167 +377,6 @@ func TestRetiredNamespacesFailExplicitly(t *testing.T) {
 			}
 			if payload.ErrorType != "retired_namespace" {
 				t.Fatalf("error_type = %q, want retired_namespace", payload.ErrorType)
-			}
-		})
-	}
-}
-
-func TestCLIForwardsRuntimeContractAcrossEnvironments(t *testing.T) {
-	testCases := []struct {
-		name        string
-		args        []string
-		wantMethod  string
-		wantPath    string
-		wantEnv     string
-		wantRuntime string
-	}{
-		{
-			name:        "dev skill deploy",
-			args:        []string{"dev", "skill", "deploy", "together"},
-			wantMethod:  http.MethodPost,
-			wantPath:    "/runtime/skill/deploy",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "test skill remove",
-			args:        []string{"test", "skill", "remove", "together"},
-			wantMethod:  http.MethodPost,
-			wantPath:    "/runtime/skill/remove",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "prod checkpoint",
-			args:        []string{"prod", "checkpoint"},
-			wantMethod:  http.MethodPost,
-			wantPath:    "/runtime/checkpoint",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
-		{
-			name:        "dev plugin install",
-			args:        []string{"dev", "plugin", "install", "moltbox-telemetry"},
-			wantMethod:  http.MethodPost,
-			wantPath:    "/runtime/dev/plugins/install",
-			wantEnv:     "dev",
-			wantRuntime: "openclaw-dev",
-		},
-		{
-			name:        "test plugin remove",
-			args:        []string{"test", "plugin", "remove", "moltbox-telemetry"},
-			wantMethod:  http.MethodDelete,
-			wantPath:    "/runtime/test/plugins/moltbox-telemetry",
-			wantEnv:     "test",
-			wantRuntime: "openclaw-test",
-		},
-		{
-			name:        "prod plugin list",
-			wantMethod:  http.MethodGet,
-			args:        []string{"prod", "plugin", "list"},
-			wantPath:    "/runtime/prod/plugins",
-			wantEnv:     "prod",
-			wantRuntime: "openclaw-prod",
-		},
-	}
-
-	for _, testCase := range testCases {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				if request.Method != testCase.wantMethod {
-					t.Fatalf("method = %s, want %s", request.Method, testCase.wantMethod)
-				}
-				if request.URL.Path != testCase.wantPath {
-					t.Fatalf("path = %s, want %s", request.URL.Path, testCase.wantPath)
-				}
-
-				payload := cli.RouteRequest{}
-				if request.Method == http.MethodPost {
-					if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-						t.Fatalf("decode request: %v", err)
-					}
-					if payload.Route == nil {
-						t.Fatal("payload.route = nil")
-					}
-					if payload.Route.Environment != testCase.wantEnv || payload.Route.Runtime != testCase.wantRuntime {
-						t.Fatalf("payload.route = %#v, want env=%s runtime=%s", payload.Route, testCase.wantEnv, testCase.wantRuntime)
-					}
-				}
-
-				route := payload.Route
-				if route == nil {
-					action := "list"
-					subject := ""
-					if strings.Contains(request.URL.Path, "/plugins/") {
-						action = "remove"
-						subject = strings.TrimPrefix(request.URL.Path, "/runtime/"+testCase.wantEnv+"/plugins/")
-					}
-					route = &cli.Route{
-						Resource:    testCase.wantEnv,
-						Kind:        cli.KindRuntimePlugin,
-						Action:      action,
-						Subject:     subject,
-						Environment: testCase.wantEnv,
-						Runtime:     testCase.wantRuntime,
-					}
-				}
-
-				switch request.URL.Path {
-				case "/runtime/checkpoint":
-					_ = json.NewEncoder(writer).Encode(cli.RuntimeCheckpointResult{
-						OK:            true,
-						Route:         route,
-						Runtime:       testCase.wantRuntime,
-						CheckpointID:  "checkpoint-123",
-						Image:         "moltbox-runtime:" + testCase.wantRuntime + "-checkpoint-123",
-						SnapshotDir:   "/srv/moltbox-state/runtime-baselines/" + testCase.wantRuntime + "/checkpoint-123/snapshot",
-						ReplayCleared: true,
-					})
-				case "/runtime/prod/plugins":
-					_ = json.NewEncoder(writer).Encode(cli.RuntimePluginListResult{
-						OK:      true,
-						Route:   route,
-						Runtime: testCase.wantRuntime,
-						Plugins: []cli.RuntimePluginInfo{
-							{Plugin: "moltbox-telemetry", Package: "moltbox-telemetry@1.2.0", Version: "1.2.0", Digest: "sha256:digest", Source: "npm"},
-						},
-					})
-				case "/runtime/dev/plugins/install", "/runtime/test/plugins/moltbox-telemetry":
-					_ = json.NewEncoder(writer).Encode(cli.RuntimePluginResult{
-						OK:      true,
-						Route:   route,
-						Runtime: testCase.wantRuntime,
-						Plugin:  "moltbox-telemetry",
-						Package: "moltbox-telemetry@1.2.0",
-						Version: "1.2.0",
-						Digest:  "sha256:digest",
-						Source:  "npm",
-						Action:  route.Action,
-						Message: "ok",
-					})
-				default:
-					_ = json.NewEncoder(writer).Encode(cli.RuntimeSkillResult{
-						OK:             true,
-						Route:          route,
-						Runtime:        testCase.wantRuntime,
-						Skill:          "together",
-						CanonicalSkill: "together-escalation",
-						Action:         route.Action,
-						Message:        "ok",
-					})
-				}
-			}))
-			defer server.Close()
-
-			t.Setenv("MOLTBOX_GATEWAY_URL", server.URL)
-
-			var output strings.Builder
-			if code := run(testCase.args, &output, ioDiscard{}); code != cli.ExitOK {
-				t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)
-			}
-			if output.Len() == 0 {
-				t.Fatal("expected gateway response output")
 			}
 		})
 	}
@@ -742,7 +458,7 @@ func TestScopedSecretsCommandsUseGatewayForSecretValue(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(cli.SecretSetResult{
 			OK:     true,
 			Route:  payload.Route,
-			Scope:  "dev",
+			Scope:  "test",
 			Name:   "TOGETHER_API_KEY",
 			Stored: true,
 		})
@@ -753,7 +469,7 @@ func TestScopedSecretsCommandsUseGatewayForSecretValue(t *testing.T) {
 	t.Setenv("MOLTBOX_SECRET_VALUE", "stdin-secret")
 
 	var output strings.Builder
-	code := run([]string{"dev", "secrets", "set", "TOGETHER_API_KEY"}, &output, ioDiscard{})
+	code := run([]string{"secret", "set", "test", "TOGETHER_API_KEY"}, &output, ioDiscard{})
 	if code != cli.ExitOK {
 		t.Fatalf("set exit code = %d, want %d", code, cli.ExitOK)
 	}
@@ -828,7 +544,7 @@ func TestSSHWrapperModePreservesQuotedArgs(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(cli.CommandResult{
 			OK:            true,
 			Route:         payload.Route,
-			ContainerName: "openclaw-dev",
+			ContainerName: "openclaw-test",
 			ExitCode:      0,
 			Stdout:        `{"ok":true}`,
 		})
@@ -840,7 +556,7 @@ func TestSSHWrapperModePreservesQuotedArgs(t *testing.T) {
 	var stdout strings.Builder
 	code := run([]string{
 		"__ssh-wrapper=automation",
-		`moltbox dev openclaw agent --agent main --local --thinking off --message Say hello in one sentence. --json`,
+		`moltbox test openclaw agent --agent main --local --thinking off --message Say hello in one sentence. --json`,
 	}, &stdout, ioDiscard{})
 	if code != cli.ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)
@@ -854,7 +570,7 @@ func TestSSHWrapperModeBootstrapDeniesRestrictedCommand(t *testing.T) {
 	var stderr strings.Builder
 	code := run([]string{
 		"__ssh-wrapper=bootstrap",
-		`moltbox test reload`,
+		`moltbox service deploy test`,
 	}, &stdout, &stderr)
 	if code != 126 {
 		t.Fatalf("exit code = %d, want 126", code)
@@ -862,7 +578,7 @@ func TestSSHWrapperModeBootstrapDeniesRestrictedCommand(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "bootstrap access denied: reload is not permitted for diagnostic-only environments") {
+	if !strings.Contains(stderr.String(), "bootstrap access denied: service access is limited to list, status, and logs") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
@@ -887,7 +603,7 @@ func TestSSHWrapperModePreservesQuotedSecretValue(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(cli.SecretSetResult{
 			OK:     true,
 			Route:  payload.Route,
-			Scope:  "dev",
+			Scope:  "test",
 			Name:   "TEST_SECRET",
 			Stored: true,
 		})
@@ -899,7 +615,7 @@ func TestSSHWrapperModePreservesQuotedSecretValue(t *testing.T) {
 	var stdout strings.Builder
 	code := run([]string{
 		"__ssh-wrapper=automation",
-		`moltbox dev secrets set TEST_SECRET value with spaces`,
+		`moltbox secret set test TEST_SECRET value with spaces`,
 	}, &stdout, ioDiscard{})
 	if code != cli.ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)
@@ -912,7 +628,7 @@ func TestSSHWrapperModeRejectsShellOperators(t *testing.T) {
 	var stderr strings.Builder
 	code := run([]string{
 		"__ssh-wrapper=automation",
-		`moltbox dev openclaw health --json; whoami`,
+		`moltbox test openclaw health --json; whoami`,
 	}, ioDiscard{}, &stderr)
 	if code != cli.ExitFailure {
 		t.Fatalf("exit code = %d, want %d", code, cli.ExitFailure)

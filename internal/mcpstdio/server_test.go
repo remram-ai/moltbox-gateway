@@ -105,7 +105,7 @@ func TestServerReturnsToolErrorsAsIsError(t *testing.T) {
 		payload: []byte("{\n  \"ok\": false,\n  \"error_type\": \"not_implemented\"\n}\n"),
 		code:    cli.ExitNotImplemented,
 	}
-	output := runServer(t, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"moltbox_run","arguments":{"args":["dev","checkpoint"]}}}`, executor)
+	output := runServer(t, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"moltbox_run","arguments":{"args":["bootstrap","gateway"]}}}`, executor)
 	response := decodeResponse(t, output)
 
 	result := response["result"].(map[string]any)

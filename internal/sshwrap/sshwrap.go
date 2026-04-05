@@ -50,30 +50,42 @@ func DenyPrefix(mode string) string {
 
 func applyBootstrapPolicy(args []string) ([]string, string, error) {
 	switch args[0] {
-	case "dev":
-		return args, "", nil
+	case "bootstrap":
+		if len(args) == 2 && args[1] == "gateway" {
+			return args, "", nil
+		}
+		return nil, "bootstrap access is limited to 'bootstrap gateway'", nil
 	case "gateway":
 		if len(args) == 2 && (args[1] == "status" || args[1] == "logs") {
 			return args, "", nil
 		}
-		if len(args) == 4 && args[1] == "service" && args[2] == "status" {
+		return nil, "gateway access is limited to status and logs", nil
+	case "service":
+		if len(args) == 2 && args[1] == "list" {
 			return args, "", nil
 		}
-		return nil, "gateway access is limited to status, logs, and service status", nil
-	case "test", "prod":
-		if len(args) == 2 && args[1] == "reload" {
-			return nil, "reload is not permitted for diagnostic-only environments", nil
+		if len(args) == 3 && (args[1] == "status" || args[1] == "logs") {
+			return args, "", nil
 		}
+		return nil, "service access is limited to list, status, and logs", nil
+	case "test", "prod":
 		if len(args) >= 3 && args[1] == "openclaw" {
 			switch args[2] {
 			case "status", "inspect", "logs", "health":
 				return args, "", nil
 			}
 		}
-		if len(args) == 3 && args[1] == "secrets" && args[2] == "list" {
-			return nil, "secret access is not permitted for diagnostic-only environments", nil
-		}
 		return nil, "test/prod access is limited to openclaw status, inspect, logs, and health", nil
+	case "ollama":
+		if len(args) >= 2 {
+			switch args[1] {
+			case "list", "ps", "show":
+				return args, "", nil
+			}
+		}
+		return nil, "ollama access is limited to list, ps, and show", nil
+	case "secret":
+		return nil, "secret access is not permitted for bootstrap sessions", nil
 	default:
 		return nil, "unsupported command", nil
 	}

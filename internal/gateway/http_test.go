@@ -93,7 +93,7 @@ func TestHandleMCPRateLimitsRepeatedFailures(t *testing.T) {
 func TestHandleExecuteScopedSecretsUsesGatewayHandlerAndLogs(t *testing.T) {
 	server, logs := newTestServer(t, nil)
 
-	body := strings.NewReader(`{"route":{"resource":"dev","kind":"scoped_secrets","action":"set","subject":"TOGETHER_API_KEY"},"secret_value":"inline-secret"}`)
+	body := strings.NewReader(`{"route":{"resource":"test","kind":"scoped_secrets","action":"set","subject":"TOGETHER_API_KEY"},"secret_value":"inline-secret"}`)
 	request := httptest.NewRequest(http.MethodPost, "/execute", body)
 	request.RemoteAddr = "172.20.0.12:4550"
 	recorder := httptest.NewRecorder()
@@ -108,18 +108,18 @@ func TestHandleExecuteScopedSecretsUsesGatewayHandlerAndLogs(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !response.OK || !response.Stored || response.Scope != "dev" || response.Name != "TOGETHER_API_KEY" {
-		t.Fatalf("response = %#v, want stored dev secret result", response)
+	if !response.OK || !response.Stored || response.Scope != "test" || response.Name != "TOGETHER_API_KEY" {
+		t.Fatalf("response = %#v, want stored test secret result", response)
 	}
 
-	if got, err := server.secretHandler.Get("dev", "TOGETHER_API_KEY"); err != nil {
+	if got, err := server.secretHandler.Get("test", "TOGETHER_API_KEY"); err != nil {
 		t.Fatalf("secretHandler.Get() error = %v", err)
 	} else if got != "inline-secret" {
 		t.Fatalf("stored secret = %q, want inline-secret", got)
 	}
 
 	logOutput := logs.String()
-	if !strings.Contains(logOutput, `"scope":"dev"`) || !strings.Contains(logOutput, `"action":"set"`) {
+	if !strings.Contains(logOutput, `"scope":"test"`) || !strings.Contains(logOutput, `"action":"set"`) {
 		t.Fatalf("expected scoped secret log entry, got %s", logOutput)
 	}
 	if strings.Contains(logOutput, "inline-secret") {
@@ -130,7 +130,7 @@ func TestHandleExecuteScopedSecretsUsesGatewayHandlerAndLogs(t *testing.T) {
 func TestHandleExecuteRejectsNonSecretRoutes(t *testing.T) {
 	server, _ := newTestServer(t, nil)
 
-	body := strings.NewReader(`{"route":{"resource":"dev","kind":"runtime_action","action":"reload","environment":"dev","runtime":"openclaw-dev"}}`)
+	body := strings.NewReader(`{"route":{"resource":"test","kind":"runtime_action","action":"reload","environment":"test","runtime":"openclaw-test"}}`)
 	request := httptest.NewRequest(http.MethodPost, "/execute", body)
 	recorder := httptest.NewRecorder()
 
