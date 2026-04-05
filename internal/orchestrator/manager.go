@@ -784,6 +784,11 @@ func (m *Manager) RuntimeOpenClaw(ctx context.Context, route *cli.Route) (cli.Co
 			snapshotRecord = record
 		}
 	}
+	if shouldClearBrowserSingletonLocks(route.NativeArgs) {
+		if _, err := m.runner.Run(ctx, "", "docker", "exec", route.Runtime, "sh", "-lc", "find /home/node/.openclaw/browser -type f \\( -name 'SingletonCookie' -o -name 'SingletonLock' -o -name 'SingletonSocket' \\) -delete 2>/dev/null || true"); err != nil {
+			return cli.CommandResult{}, err
+		}
+	}
 
 	commandArgs := append([]string{"exec", route.Runtime, "openclaw"}, route.NativeArgs...)
 	result, err := m.runner.Run(ctx, "", "docker", commandArgs...)
@@ -816,6 +821,13 @@ func (m *Manager) RuntimeOpenClaw(ctx context.Context, route *cli.Route) (cli.Co
 		Stderr:        result.Stderr,
 		ExitCode:      result.ExitCode,
 	}, nil
+}
+
+func shouldClearBrowserSingletonLocks(nativeArgs []string) bool {
+	if len(nativeArgs) < 2 {
+		return false
+	}
+	return nativeArgs[0] == "browser" && nativeArgs[1] == "start"
 }
 
 func (m *Manager) RuntimeReload(ctx context.Context, route *cli.Route) (cli.ServiceActionResult, error) {
