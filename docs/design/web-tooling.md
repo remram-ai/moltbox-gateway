@@ -8,6 +8,7 @@ The steady-state appliance baseline provides:
 
 - `web_search`
 - `web_fetch`
+- `browser`
 
 ## Tool Roles
 
@@ -22,6 +23,12 @@ The steady-state appliance baseline provides:
 - built-in OpenClaw tool
 - used to fetch a known URL cheaply
 
+`browser`:
+
+- built-in OpenClaw browser surface
+- backed by headless Chromium inside the OpenClaw runtime container
+- used for JS-heavy pages or interactive workflows that `web_fetch` cannot handle
+
 ## Removed Detour
 
 Removed from the baseline:
@@ -33,6 +40,10 @@ That path is not documented as steady-state behavior anymore.
 
 ## Native Browser Status
 
-OpenClaw’s native browser surface exists upstream, but it is not yet a proven gold-baseline dependency on this appliance.
+OpenClaw's native browser surface is enabled and healthy on this appliance through the official OpenClaw browser path.
 
-Until it is proven through official OpenClaw browser flows on the box, it stays out of the baseline and out of the service inventory.
+Current caveat:
+
+- the runtime/browser integration is proven
+- the chosen local model is still inconsistent at deciding to use `web_fetch` or `browser` through ordinary chat
+- for important tool-heavy tasks, treat `test` validation or a stronger model as the reliability boundary

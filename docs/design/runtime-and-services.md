@@ -52,13 +52,17 @@ Current gold baseline:
 
 - `web_search` backed by `searxng`
 - built-in `web_fetch`
+- native OpenClaw `browser`
 
 Not in the current baseline:
 
 - the Playwright detour
 - the old custom `web_browser` path
 
-Native browser support remains a future proof item, not a current dependency.
+Current caveat:
+
+- native browser is part of the baseline
+- the selected local Mistral model is still unreliable at choosing `web_fetch` and `browser` through ordinary chat without extra steering
 
 ## Lean Default Posture
 

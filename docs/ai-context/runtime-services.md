@@ -29,4 +29,10 @@ Web baseline:
 
 - `web_search` backed by `searxng`
 - built-in `web_fetch`
+- native OpenClaw `browser`
 - no Playwright detour in the current gold baseline
+
+Current caveat:
+
+- local chat reliably handles short answers
+- heavier tool choice through chat is still model-limited on local Mistral

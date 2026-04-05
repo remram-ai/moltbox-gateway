@@ -73,8 +73,9 @@ Core operating model:
 - service deploy, service restart, and mutating native runtime commands are snapshot-guarded
 - ZFS snapshots are the first restore-point mechanism
 - OpenClaw native backup create and verify are in use; native restore is not yet a proven primary recovery path
-- baseline web capability is `web_search` plus built-in `web_fetch`
-- the previous Playwright detour is removed from the intended baseline
+- baseline web capability is `web_search`, built-in `web_fetch`, and OpenClaw's native `browser`
+- the previous Playwright detour is removed from the intended baseline and service inventory
+- ordinary local chat is reliable for short answers, but web-tool choice through chat is still limited by the local Mistral model
 
 ## Historical Material
 

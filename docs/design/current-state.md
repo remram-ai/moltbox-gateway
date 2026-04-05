@@ -61,7 +61,8 @@ Retired public namespaces fail explicitly:
 - baseline web capability is:
   - `web_search` backed by `searxng`
   - built-in `web_fetch`
-- the previous browser detour is removed from the baseline
+  - native OpenClaw `browser`
+- the previous Playwright/browser detour is removed from the baseline
 - `test` and `prod` no longer replay runtime history during normal service deploy
 
 ## Live Recovery Facts
@@ -81,6 +82,5 @@ Retired public namespaces fail explicitly:
 
 ## Remaining Gaps
 
-- native browser support is present upstream but is not yet a proven appliance baseline
-- the local model is still not perfectly reliable at choosing tools through ordinary chat
+- the local model is still not perfectly reliable at choosing `web_fetch` and `browser` through ordinary chat
 - native OpenClaw restore is still unproven as a primary runtime recovery method

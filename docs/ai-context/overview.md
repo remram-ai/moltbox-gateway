@@ -24,5 +24,5 @@ Runtime baseline:
 
 - local first with `ollama/mistral:7b-instruct-32k`
 - Together fallback remains configured
-- baseline web capability is `web_search` plus `web_fetch`
+- baseline web capability is `web_search`, `web_fetch`, and native `browser`
 - the old Playwright/browser detour is gone from the baseline

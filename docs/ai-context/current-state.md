@@ -13,11 +13,10 @@ Important current facts:
   - `prod`
 - the public CLI is already the lightweight surface
 - `test` and `prod` use local Mistral first with Together fallback
-- baseline web capability is `web_search` and `web_fetch`
-- the Playwright/browser detour is removed from the baseline
+- baseline web capability is `web_search`, `web_fetch`, and native `browser`
+- the Playwright/browser detour is removed from the baseline and service inventory
 
 Important current caveats:
 
 - native OpenClaw restore is not yet a proven primary recovery path
-- native browser support is not yet a proven gold-baseline dependency
-- tool-choice reliability through ordinary local-model chat still needs human judgment
+- tool-choice reliability through ordinary local-model chat still needs human judgment, especially for `web_fetch` and `browser`

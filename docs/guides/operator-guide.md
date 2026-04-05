@@ -58,7 +58,9 @@ Use native OpenClaw CLI on `test`:
 - `moltbox test openclaw health --json`
 - `moltbox test openclaw models status --json`
 - `moltbox test openclaw backup create --verify`
-- `moltbox test openclaw agent --agent main --local --thinking off --message "hi" --json`
+- `moltbox test openclaw agent --session-id smoke-hi --message "hi" --json`
+- `moltbox test openclaw browser status --json`
+- `moltbox test openclaw browser tabs --json`
 
 Use native OpenClaw CLI on `prod`:
 
@@ -126,8 +128,15 @@ Baseline web capability is:
 
 - `web_search` backed by `searxng`
 - built-in `web_fetch`
+- native OpenClaw `browser`
 
-The old Playwright-based browser detour is removed from the baseline. Native browser support remains a future proof item, not a current operator dependency.
+The old Playwright-based browser detour is removed from the baseline.
+
+Important caveat:
+
+- the native browser surface is enabled and healthy
+- ordinary local Mistral chat is still not fully reliable at choosing `web_fetch` or `browser` through chat on every turn
+- if a tool-heavy web task matters, validate it in `test` before treating it as a gold-path local-chat behavior
 
 ## Retired Public Surfaces
 

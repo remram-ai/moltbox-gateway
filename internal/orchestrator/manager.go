@@ -601,21 +601,10 @@ func (m *Manager) RemoveService(ctx context.Context, route *cli.Route, service s
 	}
 
 	definition, err := m.LoadServiceDefinition(canonicalService)
-	outputDir := ""
 	if err != nil {
-		if !isLegacyRemovableService(canonicalService) {
-			return cli.ServiceActionResult{}, err
-		}
-		outputDir = m.config.ServiceStateDir(canonicalService)
-		composePath := filepath.Join(outputDir, "compose.yml")
-		if _, statErr := os.Stat(composePath); statErr != nil {
-			return cli.ServiceActionResult{}, fmt.Errorf("legacy service %s has no rendered compose state to remove: %w", canonicalService, statErr)
-		}
-		definition = ServiceDefinition{
-			ComposeProject: canonicalService,
-			ContainerNames: []string{canonicalService},
-		}
+		return cli.ServiceActionResult{}, err
 	}
+	outputDir := ""
 
 	snapshotRecord, err := m.snapshotServiceState(ctx, route.Action, canonicalService)
 	if err != nil {
@@ -656,15 +645,6 @@ func (m *Manager) RemoveService(ctx context.Context, route *cli.Route, service s
 		Command:    []string{"docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "down", "--remove-orphans"},
 		Containers: containers,
 	}, nil
-}
-
-func isLegacyRemovableService(service string) bool {
-	switch canonicalServiceName(service) {
-	case "playwright":
-		return true
-	default:
-		return false
-	}
 }
 
 func (m *Manager) ServiceList(ctx context.Context, route *cli.Route) (cli.ServiceListResult, error) {

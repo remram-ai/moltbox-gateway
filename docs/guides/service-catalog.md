@@ -23,13 +23,19 @@ Current baseline web tooling:
 - `web_fetch`
   - built-in OpenClaw tool
   - unchanged
+- `browser`
+  - built-in OpenClaw browser surface
+  - runs inside the OpenClaw runtime container with headless Chromium
 
 Not part of the current baseline:
 
 - the old Playwright service
 - the old plugin-backed `web_browser` detour
 
-Native browser support is not part of the current gold baseline until it is proven on this appliance through official OpenClaw browser surfaces.
+Current caveat:
+
+- browser is part of the runtime baseline
+- chat-level tool choice for `browser` and `web_fetch` is still limited by the local Mistral model
 
 ## Deployment And Inspection
 
