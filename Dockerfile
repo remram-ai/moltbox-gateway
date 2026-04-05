@@ -9,15 +9,20 @@ COPY pkg ./pkg
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/gateway ./cmd/gateway
 
-FROM alpine:3.20
+FROM ubuntu:24.04
 
-ARG DOCKER_COMPOSE_VERSION=v2.40.2
+ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apk add --no-cache ca-certificates curl docker-cli git \
- && mkdir -p /usr/libexec/docker/cli-plugins \
- && curl -fsSL -o /usr/libexec/docker/cli-plugins/docker-compose "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-x86_64" \
- && chmod +x /usr/libexec/docker/cli-plugins/docker-compose \
- && docker compose version
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    docker.io \
+    docker-compose-v2 \
+    git \
+    util-linux \
+    wget \
+    zfsutils-linux \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/gateway /usr/local/bin/gateway
 

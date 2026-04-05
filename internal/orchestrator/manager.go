@@ -88,6 +88,15 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 		return cli.ServiceDeployResult{}, err
 	}
 
+	action := "deploy"
+	if route != nil && strings.TrimSpace(route.Action) != "" {
+		action = strings.TrimSpace(route.Action)
+	}
+	snapshotRecord, err := m.snapshotServiceState(ctx, action, canonicalService)
+	if err != nil {
+		return cli.ServiceDeployResult{}, err
+	}
+
 	if isRuntimeService(canonicalService) {
 		if err := m.prepareRuntimeDeploy(ctx, route, canonicalService); err != nil {
 			return cli.ServiceDeployResult{}, err
@@ -132,7 +141,7 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 		}
 	}
 
-	if err := m.recordServiceDeployment(route, canonicalService, containers, "success"); err != nil {
+	if err := m.recordServiceDeployment(route, canonicalService, containers, "success", snapshotRecord.DetailMap()); err != nil {
 		return cli.ServiceDeployResult{}, err
 	}
 
@@ -194,7 +203,7 @@ func (m *Manager) BootstrapGateway(ctx context.Context, route *cli.Route) (cli.S
 	if err != nil {
 		return cli.ServiceActionResult{}, err
 	}
-	if err := m.recordServiceDeployment(route, "gateway", containers, "success"); err != nil {
+	if err := m.recordServiceDeployment(route, "gateway", containers, "success", nil); err != nil {
 		return cli.ServiceActionResult{}, err
 	}
 
@@ -366,10 +375,9 @@ func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, con
 		`NEW_VERSION="$(git -C "$REPO" rev-parse HEAD)"`,
 		`docker run --rm -v "$REPO:/src" -v "$STAGING_ROOT:/out" -w /src golang:1.23-bookworm sh -lc 'set -eu; /usr/local/go/bin/go build -buildvcs=false -o /out/moltbox ./cmd/moltbox && /usr/local/go/bin/go build -buildvcs=false -o /out/gateway ./cmd/gateway'`,
 		`CHECKSUM="$(sha256sum "$STAGING_ROOT/gateway" | awk '{print $1}')"`,
-		`cp "$STAGING_ROOT/moltbox" "$CLI_PATH"`,
-		`chmod 0755 "$CLI_PATH"`,
-		`cp "$STAGING_ROOT/moltbox" "$SHARED_CLI_PATH"`,
-		`chmod 0755 "$SHARED_CLI_PATH"`,
+		`install_cli() { TARGET="$1"; TMP="${TARGET}.tmp.$$"; cp "$STAGING_ROOT/moltbox" "$TMP"; chmod 0755 "$TMP"; mv -f "$TMP" "$TARGET"; }`,
+		`install_cli "$CLI_PATH"`,
+		`if [ "$SHARED_CLI_PATH" != "$CLI_PATH" ]; then install_cli "$SHARED_CLI_PATH"; fi`,
 		`cp "$CONFIG_SOURCE" "$CLI_CONFIG_PATH"`,
 		`chmod 0644 "$CLI_CONFIG_PATH"`,
 		`cp "$CONFIG_SOURCE" "$SYSTEM_CONFIG_PATH"`,

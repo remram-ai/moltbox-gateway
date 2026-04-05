@@ -85,8 +85,59 @@ func (m *Manager) prepareRuntimeDeploy(_ context.Context, route *cli.Route, serv
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return fmt.Errorf("create runtime state dir for %s: %w", service, err)
 	}
+	if err := m.syncRuntimeWorkspaceBaseline(service, destination); err != nil {
+		return fmt.Errorf("sync runtime workspace baseline for %s: %w", service, err)
+	}
 	if err := ensureRuntimeStateOwnership(destination); err != nil {
 		return fmt.Errorf("set runtime state ownership for %s: %w", service, err)
+	}
+	return nil
+}
+
+var managedRuntimeWorkspaceFiles = []string{
+	"AGENTS.md",
+	"SOUL.md",
+	"TOOLS.md",
+	"IDENTITY.md",
+	"USER.md",
+	"HEARTBEAT.md",
+	"BOOTSTRAP.md",
+}
+
+func (m *Manager) syncRuntimeWorkspaceBaseline(service, runtimeRoot string) error {
+	sourceRoot := filepath.Join(m.config.RuntimeRepoRoot(), canonicalServiceName(service), "workspace")
+	info, err := os.Stat(sourceRoot)
+	if err != nil {
+		if errorsIsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+
+	workspaceRoot := filepath.Join(runtimeRoot, "workspace")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		return err
+	}
+
+	for _, name := range managedRuntimeWorkspaceFiles {
+		sourcePath := filepath.Join(sourceRoot, name)
+		destinationPath := filepath.Join(workspaceRoot, name)
+		data, readErr := os.ReadFile(sourcePath)
+		if readErr != nil {
+			if errorsIsNotExist(readErr) {
+				if removeErr := os.Remove(destinationPath); removeErr != nil && !errorsIsNotExist(removeErr) {
+					return removeErr
+				}
+				continue
+			}
+			return readErr
+		}
+		if err := os.WriteFile(destinationPath, data, 0o644); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1347,7 +1398,7 @@ func (m *Manager) selectedRuntimeImage(service string) string {
 	return strings.TrimSpace(checkpoint.Image)
 }
 
-func (m *Manager) recordServiceDeployment(route *cli.Route, service string, containers []cli.ServiceContainerStatus, result string) error {
+func (m *Manager) recordServiceDeployment(route *cli.Route, service string, containers []cli.ServiceContainerStatus, result string, details map[string]string) error {
 	record := deploystate.DeploymentRecord{
 		DeploymentID:    newGatewayID("deploy"),
 		Timestamp:       time.Now().UTC().Format(time.RFC3339),
@@ -1356,6 +1407,7 @@ func (m *Manager) recordServiceDeployment(route *cli.Route, service string, cont
 		ArtifactVersion: m.currentServiceArtifactVersion(service, containers),
 		Result:          result,
 		Operation:       "service_deploy",
+		Details:         details,
 		Runtime: func() string {
 			if isRuntimeService(service) {
 				return service
