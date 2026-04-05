@@ -2,8 +2,15 @@ package localexec
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"time"
 
+	"github.com/remram-ai/moltbox-gateway/internal/command"
+	appconfig "github.com/remram-ai/moltbox-gateway/internal/config"
+	"github.com/remram-ai/moltbox-gateway/internal/docker"
+	"github.com/remram-ai/moltbox-gateway/internal/orchestrator"
+	"github.com/remram-ai/moltbox-gateway/internal/secrets"
 	"github.com/remram-ai/moltbox-gateway/internal/client"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
@@ -39,13 +46,45 @@ func (r *Runner) ExecuteParse(result cli.ParseResult, secretValue string) ([]byt
 		payload, err := marshal(cli.Error(nil, "parse_error", "missing route", "use a documented moltbox command"))
 		return payload, cli.ExitParseError, err
 	}
-	if result.Route.Kind == cli.KindBootstrap {
-		payload, err := marshal(cli.NotImplemented(
-			result.Route,
-			"bootstrap gateway is not implemented yet",
-			"bootstrap the gateway with the documented host runbook or implement the local bootstrap helper first",
-		))
-		return payload, cli.ExitNotImplemented, err
+	if result.Route.Kind == cli.KindBootstrap || (result.Route.Kind == cli.KindGateway && result.Route.Action == "update") {
+		cfg, err := appconfig.Load(r.configPath)
+		if err != nil {
+			payload, marshalErr := marshal(cli.Error(
+				result.Route,
+				localControlConfigErrorType(result.Route),
+				fmt.Sprintf("failed to load gateway config from %s", r.configPath),
+				err.Error(),
+			))
+			if marshalErr != nil {
+				return nil, cli.ExitFailure, marshalErr
+			}
+			return payload, cli.ExitFailure, nil
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		manager := orchestrator.NewManager(
+			cfg,
+			docker.NewClient(cli.DockerSocketPath()),
+			command.NewExecRunner(),
+			secrets.NewHandler(cfg.Paths.SecretsRoot),
+		)
+		localControlResult, err := executeLocalControl(ctx, manager, result.Route)
+		if err != nil {
+			payload, marshalErr := marshal(cli.Error(
+				result.Route,
+				localControlFailureType(result.Route),
+				localControlFailureMessage(result.Route),
+				err.Error(),
+			))
+			if marshalErr != nil {
+				return nil, cli.ExitFailure, marshalErr
+			}
+			return payload, cli.ExitFailure, nil
+		}
+		payload, err := marshal(localControlResult)
+		return payload, cli.ExitCodeFromPayload(payload), err
 	}
 
 	payload, err := client.NewHTTPClient(r.gatewayURL).Execute(result.Route, secretValue)
@@ -76,4 +115,48 @@ func helpPayload(topic string) string {
 	var buffer bytes.Buffer
 	_ = cli.WriteHelp(&buffer, topic)
 	return buffer.String()
+}
+
+func executeLocalControl(ctx context.Context, manager *orchestrator.Manager, route *cli.Route) (any, error) {
+	switch {
+	case route.Kind == cli.KindBootstrap:
+		return manager.BootstrapGateway(ctx, route)
+	case route.Kind == cli.KindGateway && route.Action == "update":
+		return manager.GatewayUpdate(ctx, route)
+	default:
+		return nil, fmt.Errorf("unsupported local control route %s %s", route.Kind, route.Action)
+	}
+}
+
+func localControlConfigErrorType(route *cli.Route) string {
+	switch {
+	case route.Kind == cli.KindBootstrap:
+		return "bootstrap_config_failed"
+	case route.Kind == cli.KindGateway && route.Action == "update":
+		return "gateway_update_config_failed"
+	default:
+		return "local_control_config_failed"
+	}
+}
+
+func localControlFailureType(route *cli.Route) string {
+	switch {
+	case route.Kind == cli.KindBootstrap:
+		return "bootstrap_gateway_failed"
+	case route.Kind == cli.KindGateway && route.Action == "update":
+		return "gateway_update_failed"
+	default:
+		return "local_control_failed"
+	}
+}
+
+func localControlFailureMessage(route *cli.Route) string {
+	switch {
+	case route.Kind == cli.KindBootstrap:
+		return "failed to bootstrap the gateway control plane"
+	case route.Kind == cli.KindGateway && route.Action == "update":
+		return "failed to update the gateway control plane"
+	default:
+		return "failed to execute the local control action"
+	}
 }

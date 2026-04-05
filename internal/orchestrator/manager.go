@@ -154,6 +154,60 @@ func (m *Manager) shouldSkipPull(service string) bool {
 	return strings.HasPrefix(strings.TrimSpace(m.selectedRuntimeImage(service)), "moltbox-runtime:")
 }
 
+func (m *Manager) BootstrapGateway(ctx context.Context, route *cli.Route) (cli.ServiceActionResult, error) {
+	repoRoot := m.config.GatewayRepoRoot()
+	if strings.TrimSpace(repoRoot) == "" {
+		return cli.ServiceActionResult{}, fmt.Errorf("bootstrap gateway requires repos.gateway.url in gateway config")
+	}
+
+	definition, err := m.LoadServiceDefinition("gateway")
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	outputDir, commandArgs, err := m.RenderServiceAssets("gateway", definition)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	if err := m.ensureNetwork(ctx); err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	buildResult, err := m.runner.Run(ctx, repoRoot, "docker", "build", "-t", "moltbox-gateway:latest", ".")
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+	if buildResult.ExitCode != 0 {
+		return cli.ServiceActionResult{}, fmt.Errorf("docker build for gateway failed: %s", strings.TrimSpace(buildResult.Stdout))
+	}
+
+	deployResult, err := m.runner.Run(ctx, outputDir, "docker", commandArgs...)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+	if deployResult.ExitCode != 0 {
+		return cli.ServiceActionResult{}, fmt.Errorf("docker compose up failed: %s", strings.TrimSpace(deployResult.Stdout))
+	}
+
+	containers, err := m.waitForContainers(ctx, definition.ContainerNames, 2*time.Minute)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+	if err := m.recordServiceDeployment(route, "gateway", containers, "success"); err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	return cli.ServiceActionResult{
+		OK:         true,
+		Route:      route,
+		Service:    "gateway",
+		Action:     "bootstrap",
+		Command:    append([]string{"docker"}, commandArgs...),
+		Containers: containers,
+	}, nil
+}
+
 func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.ServiceActionResult, error) {
 	definition, err := m.LoadServiceDefinition("gateway")
 	if err != nil {
@@ -244,7 +298,6 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 	systemConfigPath := "/etc/moltbox/config.yaml"
 	commandArgs := []string{
 		"run",
-		"-d",
 		"--rm",
 		"--name",
 		fmt.Sprintf("gateway-updater-%d", time.Now().Unix()),
@@ -911,6 +964,10 @@ func (m *Manager) renderContext(service string) map[string]string {
 		"gateway_container_name": "gateway",
 		"gateway_container_port": fmt.Sprintf("%d", m.config.Gateway.Port),
 		"shared_root":            filepath.Join(m.config.ServiceStateDir(service), "shared"),
+		"skills_repo_root":       m.config.SkillsRepoRoot(),
+		"gateway_repo_root":      m.config.GatewayRepoRoot(),
+		"services_repo_root":     m.config.ServicesRepoRoot(),
+		"runtime_repo_root":      m.config.RuntimeRepoRoot(),
 	}
 	return context
 }
@@ -1118,8 +1175,7 @@ func ensureCaddyTLSAssets(certsDir string) error {
 	certPath := filepath.Join(certsDir, "local.crt")
 	keyPath := filepath.Join(certsDir, "local.key")
 	requiredDNSNames := []string{
-		"moltbox-cli",
-		"moltbox-dev",
+		"moltbox-gateway",
 		"moltbox-test",
 		"moltbox-prod",
 	}

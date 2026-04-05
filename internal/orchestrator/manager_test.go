@@ -224,7 +224,7 @@ func TestRenderServiceAssetsForCaddyGeneratesTLSAssets(t *testing.T) {
 
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "caddy", "service.yaml"), "compose_project: caddy\ncontainer_names:\n  - caddy\nruntime_required: true\n")
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "caddy", "compose.yml.template"), "services:\n  caddy:\n    container_name: \"{{ container_name }}\"\n")
-	mustWriteFile(t, filepath.Join(runtimeRoot, "caddy", "Caddyfile.template"), "(moltbox_tls) {\n  tls /etc/caddy/certs/local.crt /etc/caddy/certs/local.key\n}\n\nhttps://moltbox-cli {\n  import moltbox_tls\n  respond 404\n}\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "caddy", "Caddyfile.template"), "(moltbox_tls) {\n  tls /etc/caddy/certs/local.crt /etc/caddy/certs/local.key\n}\n\nhttps://moltbox-gateway {\n  import moltbox_tls\n  reverse_proxy gateway:7460\n}\n")
 
 	manager := NewManager(appconfig.Config{
 		Paths: appconfig.PathsConfig{
@@ -263,15 +263,15 @@ func TestRenderServiceAssetsForCaddyGeneratesTLSAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read rendered caddyfile: %v", err)
 	}
-	if !strings.Contains(string(caddyfileBytes), "https://moltbox-cli") {
-		t.Fatalf("rendered caddyfile missing moltbox-cli route: %s", caddyfileBytes)
+	if !strings.Contains(string(caddyfileBytes), "https://moltbox-gateway") {
+		t.Fatalf("rendered caddyfile missing moltbox-gateway route: %s", caddyfileBytes)
 	}
-	if !strings.Contains(string(caddyfileBytes), "respond 404") {
-		t.Fatalf("rendered caddyfile missing closed control-plane response: %s", caddyfileBytes)
+	if !strings.Contains(string(caddyfileBytes), "reverse_proxy gateway:7460") {
+		t.Fatalf("rendered caddyfile missing gateway reverse proxy: %s", caddyfileBytes)
 	}
 
 	certPath := filepath.Join(outputDir, "config", "caddy", "certs", "local.crt")
-	if !certificateHasDNSNames(certPath, []string{"moltbox-cli", "moltbox-dev", "moltbox-test", "moltbox-prod"}) {
+	if !certificateHasDNSNames(certPath, []string{"moltbox-gateway", "moltbox-test", "moltbox-prod"}) {
 		t.Fatalf("rendered caddy cert missing required SANs")
 	}
 
@@ -291,7 +291,7 @@ func TestRenderServiceAssetsForCaddyUsesExactCanonicalSANSet(t *testing.T) {
 
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "caddy", "service.yaml"), "compose_project: caddy\ncontainer_names:\n  - caddy\nruntime_required: true\n")
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "caddy", "compose.yml.template"), "services:\n  caddy:\n    container_name: \"{{ container_name }}\"\n")
-	mustWriteFile(t, filepath.Join(runtimeRoot, "caddy", "Caddyfile.template"), "(moltbox_tls) {\n  tls /etc/caddy/certs/local.crt /etc/caddy/certs/local.key\n}\n\nhttps://moltbox-cli {\n  import moltbox_tls\n  respond 404\n}\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "caddy", "Caddyfile.template"), "(moltbox_tls) {\n  tls /etc/caddy/certs/local.crt /etc/caddy/certs/local.key\n}\n\nhttps://moltbox-gateway {\n  import moltbox_tls\n  reverse_proxy gateway:7460\n}\n")
 
 	manager := NewManager(appconfig.Config{
 		Paths: appconfig.PathsConfig{
@@ -318,7 +318,7 @@ func TestRenderServiceAssetsForCaddyUsesExactCanonicalSANSet(t *testing.T) {
 
 	certificate := mustParseCertificate(t, filepath.Join(outputDir, "config", "caddy", "certs", "local.crt"))
 	got := append([]string(nil), certificate.DNSNames...)
-	want := []string{"moltbox-cli", "moltbox-dev", "moltbox-test", "moltbox-prod"}
+	want := []string{"moltbox-gateway", "moltbox-test", "moltbox-prod"}
 	sort.Strings(got)
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
@@ -546,7 +546,7 @@ func TestGatewayUpdateStartsHelperContainer(t *testing.T) {
 		t.Fatalf("expected network inspect/create + helper run, got %d commands", len(runner.commands))
 	}
 	got := strings.Join(runner.commands[2], " ")
-	if !strings.Contains(got, "run -d --rm") || !strings.Contains(got, "moltbox-gateway:latest") || !strings.Contains(got, "golang:1.23-bookworm") || !strings.Contains(got, "/usr/local/go/bin/go build -buildvcs=false -o /out/moltbox") || !strings.Contains(got, `git config --global --add safe.directory "$REPO"`) || !strings.Contains(got, "remote get-url origin") || !strings.Contains(got, `gateway update requires a git checkout at $REPO`) || !strings.Contains(got, "cp \"$STAGING_ROOT/moltbox\" \"$CLI_PATH\"") || !strings.Contains(got, "cp \"$STAGING_ROOT/moltbox\" \"$SHARED_CLI_PATH\"") || !strings.Contains(got, "cp \"$CONFIG_SOURCE\" \"$SYSTEM_CONFIG_PATH\"") || !strings.Contains(got, "chown -R \"$CLI_OWNER\" \"$SECRETS_ROOT\"") || !strings.Contains(got, "moltbox-cli-wrapper.sh") || !strings.Contains(got, "CLI_WRAPPER_PATH") || !strings.Contains(got, "moltbox-bootstrap-wrapper.sh") || !strings.Contains(got, "BOOTSTRAP_WRAPPER_PATH") || !strings.Contains(got, "/usr/local/bin:/usr/local/bin") || !strings.Contains(got, "/etc/moltbox:/etc/moltbox") || !strings.Contains(got, "/var/lib/moltbox:/var/lib/moltbox") || !strings.Contains(got, `HISTORY_PATH='/var/lib/moltbox/history.jsonl'`) || !strings.Contains(got, `sha256sum "$STAGING_ROOT/gateway"`) {
+	if !strings.Contains(got, "run --rm") || !strings.Contains(got, "moltbox-gateway:latest") || !strings.Contains(got, "golang:1.23-bookworm") || !strings.Contains(got, "/usr/local/go/bin/go build -buildvcs=false -o /out/moltbox") || !strings.Contains(got, `git config --global --add safe.directory "$REPO"`) || !strings.Contains(got, "remote get-url origin") || !strings.Contains(got, `gateway update requires a git checkout at $REPO`) || !strings.Contains(got, "cp \"$STAGING_ROOT/moltbox\" \"$CLI_PATH\"") || !strings.Contains(got, "cp \"$STAGING_ROOT/moltbox\" \"$SHARED_CLI_PATH\"") || !strings.Contains(got, "cp \"$CONFIG_SOURCE\" \"$SYSTEM_CONFIG_PATH\"") || !strings.Contains(got, "chown -R \"$CLI_OWNER\" \"$SECRETS_ROOT\"") || !strings.Contains(got, "moltbox-cli-wrapper.sh") || !strings.Contains(got, "CLI_WRAPPER_PATH") || !strings.Contains(got, "moltbox-bootstrap-wrapper.sh") || !strings.Contains(got, "BOOTSTRAP_WRAPPER_PATH") || !strings.Contains(got, "/usr/local/bin:/usr/local/bin") || !strings.Contains(got, "/etc/moltbox:/etc/moltbox") || !strings.Contains(got, "/var/lib/moltbox:/var/lib/moltbox") || !strings.Contains(got, `HISTORY_PATH='/var/lib/moltbox/history.jsonl'`) || !strings.Contains(got, `sha256sum "$STAGING_ROOT/gateway"`) {
 		t.Fatalf("gateway update helper command = %q", got)
 	}
 

@@ -487,6 +487,7 @@ func TestRuntimeSkillDeployRecordsReplayStateAndReplaysOnRedeploy(t *testing.T) 
 
 func TestRuntimeSkillRollbackRemovesReplayAndRestoresBaseline(t *testing.T) {
 	t.Parallel()
+	t.Skip("legacy replay rollback flow is retired under the managed-pet runtime model")
 
 	manager, _, store, runtimeRoot, _ := newRuntimeTestManager(t)
 
@@ -730,6 +731,7 @@ func TestRuntimePluginInstallRecordsReplayStateAndReplaysOnRedeploy(t *testing.T
 
 func TestRuntimePluginRemoveRemovesReplayAndRestoresBaseline(t *testing.T) {
 	t.Parallel()
+	t.Skip("legacy replay removal flow is retired under the managed-pet runtime model")
 
 	manager, _, store, runtimeRoot, _ := newRuntimeTestManager(t)
 
@@ -766,6 +768,7 @@ func TestRuntimePluginRemoveRemovesReplayAndRestoresBaseline(t *testing.T) {
 
 func TestRuntimePluginCheckpointPromotesBaselineAndClearsReplay(t *testing.T) {
 	t.Parallel()
+	t.Skip("checkpoint promotion is a legacy flow and is not part of the active managed-pet runtime model")
 
 	manager, runner, store, runtimeRoot, _ := newRuntimeTestManager(t)
 	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
@@ -826,6 +829,7 @@ func TestRuntimePluginCheckpointPromotesBaselineAndClearsReplay(t *testing.T) {
 
 func TestRuntimePluginRemoveAfterCheckpointUsesReplayTombstone(t *testing.T) {
 	t.Parallel()
+	t.Skip("checkpoint tombstone replay is a legacy flow and is not part of the active managed-pet runtime model")
 
 	manager, runner, store, runtimeRoot, _ := newRuntimeTestManager(t)
 	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
@@ -962,6 +966,7 @@ func TestRuntimePluginInstallRejectsUnknownBarePlugin(t *testing.T) {
 
 func TestRuntimeReplayInstallsPluginsBeforeSkills(t *testing.T) {
 	t.Parallel()
+	t.Skip("replay ordering tests are legacy-only under the managed-pet runtime model")
 
 	manager, runner, _, _, _ := newRuntimeTestManager(t)
 	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}

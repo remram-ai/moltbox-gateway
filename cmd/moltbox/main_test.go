@@ -57,22 +57,6 @@ func TestCLIForwardsLightweightPublicSurface(t *testing.T) {
 			},
 		},
 		{
-			name:       "gateway update",
-			args:       []string{"gateway", "update"},
-			wantMethod: http.MethodPost,
-			wantPath:   "/update",
-			wantCode:   cli.ExitOK,
-			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
-				t.Helper()
-				_ = json.NewEncoder(writer).Encode(cli.ServiceActionResult{
-					OK:      true,
-					Route:   &cli.Route{Resource: "gateway", Kind: cli.KindGateway, Action: "update", Subject: "gateway"},
-					Service: "gateway",
-					Action:  "update",
-				})
-			},
-		},
-		{
 			name:       "service list",
 			args:       []string{"service", "list"},
 			wantMethod: http.MethodGet,
@@ -329,21 +313,39 @@ func TestCLIForwardsLightweightPublicSurface(t *testing.T) {
 	}
 }
 
-func TestBootstrapGatewayReturnsNotImplemented(t *testing.T) {
+func TestBootstrapGatewayFailsClearlyWithoutConfig(t *testing.T) {
 	t.Parallel()
 
 	var output strings.Builder
 	code := run([]string{"bootstrap", "gateway"}, &output, ioDiscard{})
-	if code != cli.ExitNotImplemented {
-		t.Fatalf("exit code = %d, want %d", code, cli.ExitNotImplemented)
+	if code != cli.ExitFailure {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitFailure)
 	}
 
 	var payload cli.Envelope
 	if err := json.Unmarshal([]byte(output.String()), &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	if payload.ErrorType != "not_implemented" {
-		t.Fatalf("error_type = %q, want not_implemented", payload.ErrorType)
+	if payload.ErrorType != "bootstrap_config_failed" {
+		t.Fatalf("error_type = %q, want bootstrap_config_failed", payload.ErrorType)
+	}
+}
+
+func TestGatewayUpdateFailsClearlyWithoutConfig(t *testing.T) {
+	t.Parallel()
+
+	var output strings.Builder
+	code := run([]string{"gateway", "update"}, &output, ioDiscard{})
+	if code != cli.ExitFailure {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitFailure)
+	}
+
+	var payload cli.Envelope
+	if err := json.Unmarshal([]byte(output.String()), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.ErrorType != "gateway_update_config_failed" {
+		t.Fatalf("error_type = %q, want gateway_update_config_failed", payload.ErrorType)
 	}
 }
 

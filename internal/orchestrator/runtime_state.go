@@ -81,7 +81,14 @@ func isRuntimeService(service string) bool {
 }
 
 func (m *Manager) prepareRuntimeDeploy(_ context.Context, route *cli.Route, service string) error {
-	return m.restoreRuntimeBaseline(service)
+	destination := m.config.RuntimeComponentDir(service)
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		return fmt.Errorf("create runtime state dir for %s: %w", service, err)
+	}
+	if err := ensureRuntimeStateOwnership(destination); err != nil {
+		return fmt.Errorf("set runtime state ownership for %s: %w", service, err)
+	}
+	return nil
 }
 
 func (m *Manager) restoreRuntimeBaseline(service string) error {

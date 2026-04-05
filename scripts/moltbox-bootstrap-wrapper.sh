@@ -12,4 +12,8 @@ if [ -z "${SSH_ORIGINAL_COMMAND:-}" ]; then
   deny "missing command"
 fi
 
-exec "$CLI_PATH" "__ssh-wrapper=bootstrap" "$SSH_ORIGINAL_COMMAND"
+if [ "$(id -u)" -eq 0 ]; then
+  exec "$CLI_PATH" "__ssh-wrapper=bootstrap" "$SSH_ORIGINAL_COMMAND"
+fi
+
+exec sudo -n "$CLI_PATH" "__ssh-wrapper=bootstrap" "$SSH_ORIGINAL_COMMAND"
