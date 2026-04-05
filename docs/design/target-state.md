@@ -34,8 +34,9 @@ Gold baseline web capability:
 
 - `web_search`
 - `web_fetch`
+- native OpenClaw `browser`
 
-Native browser support is allowed as a future extension only after it is proven through official OpenClaw browser surfaces on this appliance.
+The steady-state browser path is the official OpenClaw browser surface backed by headless Chromium inside the runtime. The old Playwright detour is not part of the target model.
 
 ## Target Recovery Model
 
