@@ -19,6 +19,7 @@ RUN apt-get update \
     docker.io \
     docker-compose-v2 \
     git \
+    openssh-client \
     util-linux \
     wget \
     zfsutils-linux \
