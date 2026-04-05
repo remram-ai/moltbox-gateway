@@ -1,40 +1,26 @@
 # Gateway Design
 
-This directory is the authoritative design package for `moltbox-gateway`.
+This directory is the current design package for `moltbox-gateway`.
 
-Until these concepts are promoted back up into `remram`, this directory is the local source of truth for:
+It is the local source of truth for:
 
 - the appliance shape
-- the gateway and CLI contract
-- the host and operations model
-- the OpenClaw runtime integration model
-- the backup and recovery model
-- the delivery and migration shape
-
-If an older document in `remram` conflicts with this directory, this directory wins for gateway implementation work.
+- the CLI and gateway contract
+- the managed-pet OpenClaw model
+- the recovery model
+- the host and operator model
+- the current web-tooling story
 
 ## Reading Order
-
-Read these in order:
 
 1. `system-overview.md`
 2. `current-state.md`
 3. `target-state.md`
 4. `cli-and-gateway.md`
 5. `runtime-and-services.md`
-6. `host-and-operations.md`
-7. `backup-and-recovery.md`
-8. `delivery-and-migration.md`
-
-## Supporting Material
-
-Use these alongside the design docs:
-
-- `../decisions/` for formal direction changes
-- `../reviews/` for evidence-heavy critique and audits
-- `../plans/` for execution and validation plans
-- `../runbooks/` for bounded operator procedures
-- `../ai-context/` for AI-friendly summaries and import bundles
+6. `backup-and-recovery.md`
+7. `host-and-operations.md`
+8. `web-tooling.md`
 
 ## Current Design Stance
 
@@ -42,11 +28,23 @@ The design package assumes all of these:
 
 - appliance `dev` is gone
 - OpenSearch is gone
-- Postgres is not part of this box rebuild
-- the appliance service set is `gateway`, `caddy`, `ollama`, `openclaw-test`, and `openclaw-prod`
+- the steady-state appliance service set is `gateway`, `caddy`, `ollama`, `searxng`, `openclaw-test`, and `openclaw-prod`
 - `prod` is a managed pet
-- `test` is the appliance proving lane
-- local development happens outside the appliance
-- OpenClaw is managed through native config, plugin, skill, and backup surfaces
+- `test` is the proving lane
+- replay and checkpoint are not the normal `test` / `prod` lifecycle
+- snapshots are first-class recovery primitives
+- normal runtime mutation uses native OpenClaw surfaces
 - the gateway is a thin appliance orchestrator, not the authority for OpenClaw internals
-- ZFS-backed snapshots are a hard host precondition
+- baseline web capability is `web_search` plus built-in `web_fetch`
+- the Playwright detour is removed from the current gold baseline
+
+## Historical Material
+
+Use:
+
+- `../decisions/`
+- `../reviews/`
+- `../plans/`
+- `../runbooks/`
+
+for historical evidence, audits, and dated execution records.

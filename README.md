@@ -1,58 +1,83 @@
 # Moltbox Gateway
 
-`moltbox-gateway` owns the Moltbox control plane and the `moltbox` CLI.
+`moltbox-gateway` is the control-plane and CLI repo for the Moltbox appliance.
 
-This repository is now the local authority for gateway design, implementation, and builder execution material. Broader platform concepts can be promoted back to `remram` later.
+This repo is the local source of truth for the current Gateway/OpenClaw operating model. Older `remram` docs are useful history, but they do not override this repo for Gateway implementation and operations.
 
 ## Humans Start Here
 
-Read these first:
+Read these in order:
 
-- `docs/design/README.md`
-- `docs/design/system-overview.md`
-- `docs/design/current-state.md`
-- `docs/design/target-state.md`
+1. `docs/guides/operator-guide.md`
+2. `docs/guides/service-catalog.md`
+3. `docs/design/README.md`
+4. `docs/design/system-overview.md`
+5. `docs/design/cli-and-gateway.md`
+6. `docs/design/runtime-and-services.md`
+7. `docs/design/backup-and-recovery.md`
+8. `docs/design/host-and-operations.md`
+9. `docs/design/web-tooling.md`
 
-Then use:
+Use these after the current docs:
 
 - `docs/decisions/2026-04-04-openclaw-operating-model.md`
-- `docs/reviews/2026-04-04-openclaw-operating-model-review.md`
-- `docs/reviews/2026-04-04-cli-surface-review.md`
-- `docs/plans/2026-04-04-clean-moltbox-execution-plan.md`
-- `docs/plans/2026-04-04-clean-moltbox-validation-plan.md`
 - `docs/runbooks/2026-04-04-zfs-rebuild-ssh-takeover-runbook.md`
+- `docs/reviews/README.md`
+- `docs/plans/README.md`
 
 ## AIs Start Here
 
-Import:
+Import these first:
 
-- `docs/ai-context/README.md`
-- `docs/ai-context/overview.md`
-- `docs/ai-context/current-state.md`
-- `docs/ai-context/future-state.md`
+1. `docs/ai-context/README.md`
+2. `docs/ai-context/overview.md`
+3. `docs/ai-context/current-state.md`
+4. `docs/ai-context/future-state.md`
+5. `docs/ai-context/operator-workflows.md`
 
-Then import the themed context file that matches the task:
+Then add the task-specific context:
 
 - `docs/ai-context/cli-gateway.md`
 - `docs/ai-context/runtime-services.md`
 - `docs/ai-context/host-ops.md`
-- `docs/ai-context/implementation-plan.md`
 
-Current implementation posture:
+## Current Appliance Contract
 
-- the legacy Python implementation is preserved under `archive/legacy-implementation/`
-- `archive/README.md` explains which archive materials are still useful and which assumptions must be ignored
-- the host-installed `moltbox` binary is a thin HTTP client
-- the long-running gateway server runs in a Docker container named `gateway`
-- builds tag the gateway image as `moltbox-gateway:latest`
-- the host CLI talks directly to the gateway over `http://127.0.0.1:7460`
-- the public CLI surface is intentionally lightweight: `gateway`, `service`, `test openclaw`, `prod openclaw`, `ollama`, and `secret`
-- the gateway remains the service-plane orchestrator and still carries some legacy internal runtime routes during the transition
-- scoped secrets and MCP tokens are still gateway-owned
+Public CLI:
 
-Extra implementation commands currently exist for bootstrap and diagnostics:
+```text
+moltbox
+  bootstrap gateway
+  gateway status|logs|update|mcp-stdio
+  service list|status|deploy|restart|remove|logs <service>
+  test openclaw <native args>
+  prod openclaw <native args>
+  ollama <native args>
+  secret set|list|delete <scope>
+```
 
-- `moltbox bootstrap gateway` currently exists as a transition stub and is not fully implemented yet
-- `moltbox gateway mcp-stdio`
+Current managed services:
 
-Future service images and orchestration flows should come from `moltbox-services`, with gateway treated as a service there.
+- `gateway`
+- `caddy`
+- `ollama`
+- `searxng`
+- `test`
+- `prod`
+
+Core operating model:
+
+- `test` and `prod` are managed-pet OpenClaw runtimes
+- normal runtime mutation happens through native `openclaw` CLI surfaces
+- replay and checkpoint are not part of the normal `test` / `prod` lifecycle
+- service deploy, service restart, and mutating native runtime commands are snapshot-guarded
+- ZFS snapshots are the first restore-point mechanism
+- OpenClaw native backup create and verify are in use; native restore is not yet a proven primary recovery path
+- baseline web capability is `web_search` plus built-in `web_fetch`
+- the previous Playwright detour is removed from the intended baseline
+
+## Historical Material
+
+The dated docs under `docs/reviews/` and `docs/plans/` are retained as decision history and execution records.
+
+Treat them as historical evidence, not as the current operator contract.

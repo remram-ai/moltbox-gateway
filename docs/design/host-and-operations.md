@@ -1,131 +1,70 @@
 # Host And Operations
 
-This document defines the host baseline, storage layout, identity model, and operational hygiene requirements.
+This document defines host layout, storage posture, and operator roles.
 
-## Host Baseline
+## Host Layout
 
-Target host assumptions:
+Required host paths:
 
-- Ubuntu Server 24.04 LTS family
-- Docker and required runtime dependencies installed
-- ZFS-backed storage for Moltbox-critical state
-- preserved human admin access on `moltbox-prime`
+- `/usr/local/bin/moltbox`
+- `/etc/moltbox/config.yaml`
+- `/opt/moltbox/repos/moltbox-gateway`
+- `/opt/moltbox/repos/moltbox-services`
+- `/opt/moltbox/repos/moltbox-runtime`
+- `/srv/moltbox-state`
+- `/srv/moltbox-logs`
+- `/var/lib/moltbox/secrets`
+- `/mnt/moltbox-backup`
 
-The current EXT4 host is not an acceptable final baseline.
+## Storage Posture
 
-## Required Storage Model
-
-At minimum, the final host must provide ZFS-backed datasets for:
+Critical appliance paths must be on ZFS:
 
 - `/srv/moltbox-state`
 - `/srv/moltbox-logs`
 - `/var/lib/moltbox`
+- `/opt/moltbox/repos`
 
-A single pool is sufficient if it performs well and is operationally simple.
-
-## Required Host Paths
-
-| Path | Purpose |
-| --- | --- |
-| `/usr/local/bin/moltbox` | host CLI entrypoint |
-| `/etc/moltbox/config.yaml` | host CLI config |
-| `/opt/moltbox/repos/moltbox-gateway` | gateway repo checkout |
-| `/opt/moltbox/repos/moltbox-services` | service repo checkout |
-| `/opt/moltbox/repos/moltbox-runtime` | runtime repo checkout |
-| `/opt/moltbox/repos/remram-skills` | skill and plugin source checkout |
-| `/srv/moltbox-state` | appliance state |
-| `/srv/moltbox-logs` | appliance logs |
-| `/var/lib/moltbox/secrets` | encrypted secret material |
-| `/var/lib/moltbox/history.jsonl` | host-level gateway history |
-| `/mnt/moltbox-backup` | local backup target disk |
+The base OS may remain on `ext4`. The appliance-critical state boundary may not.
 
 ## Ownership Rules
 
 Required paths must be:
 
 - system-owned
-- stable across reboots
 - outside `/home/*`
+- stable across reboots
 
-Personal users may administer the box, but runtime operation must not depend on a personal account owning state.
+## Operator Roles
 
-## Identity Model
+Human admin:
 
-### Human admin
+- preserved trusted admin path
 
-Keep the operator's sudo-capable human access.
+AI test operator:
 
-That account exists for:
-
-- emergency intervention
-- high-trust human administration
-- rebuild and bootstrap assistance
-
-It is not the runtime ownership model.
-
-### AI test identity
-
-Create `moltbox-ai-test` with:
-
-- forced-command wrapper
-- access to `moltbox` CLI
-- broad test-side mutation rights
+- forced-command SSH identity
+- may use the CLI for `test`
+- may mutate `test`, `ollama`, and `searxng`
 - no arbitrary shell
 
-### AI prod identity
+AI prod operator:
 
-Create `moltbox-ai-prod` with:
-
-- forced-command wrapper
-- access to `moltbox` CLI
-- inspection and debugging rights
+- forced-command SSH identity
+- may use the CLI for prod diagnostics
+- no prod mutation
 - no arbitrary shell
-- no prod mutation rights
 
-### Break-glass admin
+Break-glass admin:
 
-Create one separate break-glass admin account with its own key.
+- elevated emergency access
 
-Do not create a second root account.
+## Normal Operations Rule
 
-## Networking And Naming
+Normal work should happen through:
 
-Names to preserve:
+- the host-installed `moltbox` CLI
+- the service plane
+- native `openclaw` commands through the CLI wrappers
 
-- metal host: `moltbox-prime`
-- gateway ingress: `moltbox-gateway`
-- runtime ingress: `moltbox-test`
-- runtime ingress: `moltbox-prod`
-
-The metal-host admin path must remain available even when Caddy or a runtime is unhealthy.
-
-## Patching
-
-The host must leave this rebuild with patching configured.
-
-Minimum acceptable posture:
-
-- unattended upgrades or equivalent timer
-- visible evidence of last patch run
-- documented reboot policy
-
-## Manual Operations Rule
-
-Manual human Linux work should be minimized to:
-
-- backup extraction
-- reinstall or rebuild steps
-- fastest path back to SSH
-
-After SSH works, the AI should take over the remaining operations.
-
-Use:
-
-- `../runbooks/2026-04-04-zfs-rebuild-ssh-takeover-runbook.md`
-
-for the bounded manual path.
-
-## Related Documents
-
-- [Backup And Recovery](backup-and-recovery.md)
-- [Delivery And Migration](delivery-and-migration.md)
+Break-glass SSH is for recovery, debugging, and research.

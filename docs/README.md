@@ -2,31 +2,45 @@
 
 This directory is the documentation home for `moltbox-gateway`.
 
-For now, this repo is the authoritative design home for the gateway and clean-box appliance shape. Older `remram` docs are useful history, but they do not overrule this directory for gateway implementation work.
+Current truth lives in:
 
-## Human Entry Points
+- `guides/`
+- `design/`
+- `ai-context/`
 
-Humans should start with:
+Historical records live in:
 
-- `design/README.md`
-- `design/system-overview.md`
-- `design/current-state.md`
-- `design/target-state.md`
+- `decisions/`
+- `reviews/`
+- `plans/`
+- `runbooks/`
 
-Then use:
+## Human Entry Path
 
-- `decisions/` for formal direction changes
-- `reviews/` for evidence-heavy analysis
-- `plans/` for execution and validation plans
-- `runbooks/` for bounded operator procedures
+Read these first:
 
-## AI Entry Points
+1. `guides/operator-guide.md`
+2. `guides/service-catalog.md`
+3. `design/README.md`
+4. `design/system-overview.md`
+5. `design/cli-and-gateway.md`
+6. `design/runtime-and-services.md`
+7. `design/backup-and-recovery.md`
+8. `design/host-and-operations.md`
+9. `design/web-tooling.md`
 
-AIs should start with:
+## AI Entry Path
 
-- `ai-context/README.md`
-- `ai-context/overview.md`
-- `ai-context/current-state.md`
-- `ai-context/future-state.md`
+Import these first:
 
-Then import the task-specific context file they need.
+1. `ai-context/README.md`
+2. `ai-context/overview.md`
+3. `ai-context/current-state.md`
+4. `ai-context/future-state.md`
+5. `ai-context/operator-workflows.md`
+
+Then add the task-specific context file you need.
+
+## Rule
+
+If a current guide or design doc conflicts with a dated review or plan, the current guide/design doc wins for live Gateway work.

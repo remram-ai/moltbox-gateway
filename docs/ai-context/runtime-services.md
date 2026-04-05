@@ -1,51 +1,32 @@
 # Runtime And Services Context
 
-Use this file when the task is mostly about service templates, runtime baselines, model/provider wiring, or OpenClaw integration.
+Use this file when the task is mostly about service templates, runtime baseline, or OpenClaw integration.
 
-Final service inventory:
+Service inventory:
 
 - `gateway`
 - `caddy`
 - `ollama`
+- `searxng`
 - `openclaw-test`
 - `openclaw-prod`
 
-Removed from the target box:
-
-- `openclaw-dev`
-- `opensearch`
-
 Runtime rules:
 
-- `moltbox-runtime` owns desired baseline
-- OpenClaw owns native runtime behavior
+- `moltbox-runtime` owns the approved baseline
 - `test` is the proving lane
-- `prod` is protected and only changes through official runtime surfaces
+- `prod` changes only after `test` proves the baseline
+- replay is not the normal runtime model
+- native OpenClaw surfaces are the official runtime mutation path
 
-Local model baseline:
+Model/provider baseline:
 
-- provider `ollama`
-- model `mistral:7b-instruct-32k`
-- context `32768`
+- primary: `ollama/mistral:7b-instruct-32k`
+- fallback: Together `Kimi K2.5`
+- context: `32768`
 
-Together rule:
+Web baseline:
 
-- must remain available
-- must be expressed through official OpenClaw provider or plugin behavior
-- must not be hidden in gateway logic
-
-Cortex MVP seam:
-
-- Phase 0 uses `memory.backend = qmd`
-- Phase 0 keeps `contextEngine = legacy`
-- Phase 1 allows only `cortex-phase1-bridge`
-- Phase 1 enables that bridge in `dry-run` mode first
-
-Plugin trust rule:
-
-- `plugins.allow` must be explicit
-- no untracked steady-state plugin code
-
-Canonical source:
-
-- `../design/runtime-and-services.md`
+- `web_search` backed by `searxng`
+- built-in `web_fetch`
+- no Playwright detour in the current gold baseline

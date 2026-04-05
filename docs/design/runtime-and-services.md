@@ -1,167 +1,72 @@
 # Runtime And Services
 
-This document defines the service plane and OpenClaw runtime model for the target appliance.
+This document defines the current service inventory and the managed-pet runtime model.
 
-## Final Service Inventory
+## Service Inventory
 
-| Service | Source repo | Purpose | Notes |
-| --- | --- | --- | --- |
-| `gateway` | `moltbox-gateway` | control plane | one gateway only |
-| `caddy` | `moltbox-services` | ingress and TLS | fronts gateway and runtimes |
-| `ollama` | `moltbox-services` | local model serving | shared local provider |
-| `openclaw-test` | `moltbox-services` + `moltbox-runtime` | proving runtime | mutation lane |
-| `openclaw-prod` | `moltbox-services` + `moltbox-runtime` | protected runtime | managed pet |
+| Service | Source | Role |
+| --- | --- | --- |
+| `gateway` | `moltbox-services` | control plane |
+| `caddy` | `moltbox-services` | ingress and TLS |
+| `ollama` | `moltbox-services` | local model backend |
+| `searxng` | `moltbox-services` | local search backend |
+| `openclaw-test` | `moltbox-services` + `moltbox-runtime` | proving runtime |
+| `openclaw-prod` | `moltbox-services` + `moltbox-runtime` | protected runtime |
 
-Removed services:
+## Runtime Baseline Rules
 
-- `openclaw-dev`
-- `opensearch`
+- `moltbox-runtime` owns the approved baseline
+- `test` proves baseline changes before `prod`
+- `prod` is not rebuilt from replay history
+- service deploy syncs the runtime baseline files into persisted runtime state
 
-## Runtime Baseline Ownership
+## Replay And Checkpoint
 
-`moltbox-runtime` should define the desired baseline for:
+Replay and checkpoint are not part of the normal `test` / `prod` lifecycle.
 
-- agent definitions
-- provider definitions
-- local model selection
-- Together escalation wiring
-- plugin allowlist and trust posture
-- tool policy and routing
+Legacy replay code may survive temporarily for legacy import or `openclaw-dev`, but it is not the steady-state path for managed runtimes.
 
-It should not try to encode every piece of live runtime drift as Git baseline.
+## Native OpenClaw Lifecycle
 
-## OpenClaw Runtime Rules
+Supported runtime operations use native OpenClaw surfaces:
 
-### Official mutation paths only
+- `config`
+- `health`
+- `models`
+- `backup`
+- `agent`
+- other official runtime-local commands
 
-Normal runtime changes should happen through:
+These go through `moltbox test openclaw ...` and `moltbox prod openclaw ...`.
 
-- native OpenClaw config application
-- native plugin lifecycle
-- native skill lifecycle
-- native runtime backup and restore
+## Model And Provider Baseline
 
-### Test first
-
-Capability changes land in `test` first.
-
-Promotion to `prod` happens only after:
-
-- config is validated
-- health is good
-- local model behavior is proven
-- Together escalation is proven
-
-### Prod protection
-
-`prod` should not be treated like a throwaway container.
-
-Expected posture:
-
-- official install/config surfaces only
-- restore point before risky change
-- narrow, auditable change path
-
-## Local Model Baseline
-
-Keep the current known-good local inference shape:
-
-- provider: `ollama`
-- model: `mistral:7b-instruct-32k`
+- primary provider: `ollama`
+- primary model: `mistral:7b-instruct-32k`
 - context window: `32768`
+- fallback provider/model: Together with `Kimi K2.5`
 
-Do not change model or container resource posture casually during the clean-box rebuild.
+## Web Baseline
 
-## Together Escalation
+Current gold baseline:
 
-Together remains required, but it must not be a hidden gateway behavior.
+- `web_search` backed by `searxng`
+- built-in `web_fetch`
 
-Acceptable implementation shapes:
+Not in the current baseline:
 
-- pure OpenClaw provider configuration
-- plugin-backed provider or maintenance capability
-- a tracked Remram plugin plus runtime baseline config
+- the Playwright detour
+- the old custom `web_browser` path
 
-Unacceptable shape:
+Native browser support remains a future proof item, not a current dependency.
 
-- gateway hard-coded model routing
+## Lean Default Posture
 
-## Cortex MVP Overlay Shape
+The baseline is intentionally not a heavy coding-agent posture.
 
-`remram-cortex` currently defines the Phase 0 and Phase 1 OpenClaw MVP seam like this:
+Desired defaults:
 
-- Phase 0 overlay keeps `memory.backend = qmd`
-- Phase 0 overlay keeps `memory.qmd.sessions.enabled = false`
-- Phase 0 overlay keeps `plugins.slots.contextEngine = legacy`
-- Phase 0 overlay leaves `cortex-phase1-bridge` disabled
-- Phase 1 overlay keeps `contextEngine = legacy`
-- Phase 1 overlay sets `plugins.allow = ["cortex-phase1-bridge"]`
-- Phase 1 overlay enables `cortex-phase1-bridge`
-- Phase 1 overlay allows bounded prompt injection
-- Phase 1 overlay starts the bridge in `dry-run` mode
-
-That matches the target gateway model:
-
-- gateway deploys services and approved packages
-- OpenClaw stays owner of sessions, compaction, and runtime-local behavior
-- Cortex attaches through bounded overlays and plugins instead of gateway replay ownership
-
-## Plugin Trust Posture
-
-The runtime baseline must make trust explicit.
-
-That includes:
-
-- explicit `plugins.allow`
-- no untracked local plugin state in steady state
-- tracked handling of any `behavior-guard` equivalent
-
-## Caddy And Naming
-
-Caddy should front:
-
-- `moltbox-gateway`
-- `moltbox-test`
-- `moltbox-prod`
-
-Direct host admin access on `moltbox-prime` stays separate from the application ingress names.
-
-## Resource Policy
-
-For the first clean rebuild:
-
-- do not invent new CPU limits
-- do not invent new memory limits
-- keep the current known-good local model posture unless validation forces change
-
-If resource limits are added later, they need explicit test evidence.
-
-## Health Requirements
-
-Each final service must have:
-
-- a clear deploy path
-- a clear healthy state
-- log visibility through the CLI
-
-Each runtime must prove:
-
-- native status works
-- chat works
-- local provider usage is visible
-- Together escalation is visible
-
-## Later Work
-
-Reasonable later extensions include:
-
-- a narrow OpenClaw maintenance plugin
-- richer runtime diagnostics
-- additional data services such as Postgres
-
-Those are not part of the clean appliance baseline.
-
-## Related Documents
-
-- [CLI And Gateway](cli-and-gateway.md)
-- [Backup And Recovery](backup-and-recovery.md)
+- concise answers
+- lightweight informational capability
+- web verification when needed
+- no broad coding or service-building behavior as the default assistant personality

@@ -350,6 +350,8 @@ func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, con
 	bootstrapWrapperPath := "/usr/local/bin/moltbox-bootstrap-wrapper"
 	sharedCLIPath := "/usr/local/bin/moltbox"
 	systemConfigPath := "/etc/moltbox/config.yaml"
+	gitSSHKeyPath := filepath.Join(secretsRoot, "git", "id_ed25519")
+	gitKnownHostsPath := filepath.Join(secretsRoot, "git", "known_hosts")
 	return strings.Join([]string{
 		"set -eu",
 		fmt.Sprintf("REPO=%s", shellQuote(repoRoot)),
@@ -369,12 +371,16 @@ func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, con
 		fmt.Sprintf("SHARED_CLI_PATH=%s", shellQuote(sharedCLIPath)),
 		fmt.Sprintf("SYSTEM_CONFIG_PATH=%s", shellQuote(systemConfigPath)),
 		fmt.Sprintf("HISTORY_PATH=%s", shellQuote(historyPath)),
+		fmt.Sprintf("GIT_SSH_KEY=%s", shellQuote(gitSSHKeyPath)),
+		fmt.Sprintf("GIT_SSH_KNOWN_HOSTS=%s", shellQuote(gitKnownHostsPath)),
 		`mkdir -p "$STAGING_ROOT" "$(dirname "$CLI_PATH")" "$(dirname "$CLI_CONFIG_PATH")" "$(dirname "$SYSTEM_CONFIG_PATH")"`,
 		`mkdir -p "$SECRETS_ROOT"`,
 		`mkdir -p "$(dirname "$HISTORY_PATH")"`,
+		`mkdir -p "$(dirname "$GIT_SSH_KEY")"`,
 		`command -v git >/dev/null 2>&1 || { echo "gateway update requires git in the helper container"; exit 1; }`,
 		`if [ ! -d "$REPO/.git" ] && [ ! -f "$REPO/.git" ]; then echo "gateway update requires a git checkout at $REPO"; exit 1; fi`,
 		`git config --global --add safe.directory "$REPO"`,
+		`if [ -f "$GIT_SSH_KEY" ]; then chmod 0600 "$GIT_SSH_KEY"; touch "$GIT_SSH_KNOWN_HOSTS"; chmod 0644 "$GIT_SSH_KNOWN_HOSTS"; export GIT_SSH_COMMAND="ssh -i $GIT_SSH_KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=$GIT_SSH_KNOWN_HOSTS -o StrictHostKeyChecking=yes"; ORIGIN_URL="$(git -C "$REPO" remote get-url origin 2>/dev/null || true)"; case "$ORIGIN_URL" in https://github.com/*) git -C "$REPO" remote set-url origin "git@github.com:${ORIGIN_URL#https://github.com/}" ;; esac; fi`,
 		`OLD_VERSION="$(git -C "$REPO" rev-parse HEAD)"`,
 		`SOURCE="$REPO"`,
 		`if git -C "$REPO" remote get-url origin >/dev/null 2>&1; then SOURCE="$(git -C "$REPO" remote get-url origin)"; git -C "$REPO" fetch --all --tags --prune; git -C "$REPO" pull --ff-only; fi`,

@@ -1,10 +1,11 @@
 # Reviews
 
-Use this directory for detailed architecture and implementation reviews.
+This directory holds detailed audits and dated review material.
 
-Reviews are allowed to be broader, sharper, and more exploratory than decision records. They should:
+Use it for:
 
-- separate current-state facts from recommendations
-- cite repo evidence where possible
-- call out uncertainty directly
-- feed one or more decision records in `../decisions/`
+- historical critique
+- implementation audits
+- evidence-heavy findings that may outlive the current guides
+
+Do not treat dated review docs as the current operator contract when a current guide or design doc says otherwise.
