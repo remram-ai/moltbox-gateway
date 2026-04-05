@@ -785,7 +785,7 @@ func (m *Manager) RuntimeOpenClaw(ctx context.Context, route *cli.Route) (cli.Co
 		}
 	}
 	if shouldClearBrowserSingletonLocks(route.NativeArgs) {
-		if _, err := m.runner.Run(ctx, "", "docker", "exec", route.Runtime, "sh", "-lc", "find /home/node/.openclaw/browser -type f \\( -name 'SingletonCookie' -o -name 'SingletonLock' -o -name 'SingletonSocket' \\) -delete 2>/dev/null || true"); err != nil {
+		if _, err := m.runner.Run(ctx, "", "docker", "exec", route.Runtime, "sh", "-lc", "find /home/node/.openclaw/browser \\( -type f -o -type l \\) \\( -name 'SingletonCookie' -o -name 'SingletonLock' -o -name 'SingletonSocket' \\) -delete 2>/dev/null || true"); err != nil {
 			return cli.CommandResult{}, err
 		}
 	}
