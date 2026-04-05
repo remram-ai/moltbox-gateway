@@ -421,7 +421,65 @@ func TestDeployServiceRejectsGatewaySelfMutation(t *testing.T) {
 	}
 }
 
-func TestRestartServiceUsesDeployLifecycle(t *testing.T) {
+func TestRuntimeOpenClawMutationKindIgnoresHelpAndDryRun(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "config set help",
+			args: []string{"config", "set", "--help"},
+		},
+		{
+			name: "config set dry run",
+			args: []string{"config", "set", "logging.level", `"info"`, "--dry-run"},
+		},
+		{
+			name: "plugin install help",
+			args: []string{"plugins", "install", "--help"},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if kind, ok := runtimeOpenClawMutationKind(test.args); ok {
+				t.Fatalf("runtimeOpenClawMutationKind(%#v) = %q, true; want no mutation", test.args, kind)
+			}
+		})
+	}
+}
+
+func TestRuntimeOpenClawMutationKindDetectsRealMutations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"config", "set", "logging.level", `"info"`}, want: "config_set"},
+		{args: []string{"plugins", "install", "browser"}, want: "plugins_install"},
+		{args: []string{"backup", "restore", "/tmp/backup"}, want: "backup_restore"},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := runtimeOpenClawMutationKind(test.args)
+			if !ok || got != test.want {
+				t.Fatalf("runtimeOpenClawMutationKind(%#v) = %q, %v; want %q, true", test.args, got, ok, test.want)
+			}
+		})
+	}
+}
+
+func TestRestartServiceUsesComposeRestartLifecycle(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -471,14 +529,11 @@ func TestRestartServiceUsesDeployLifecycle(t *testing.T) {
 	if !result.OK {
 		t.Fatal("expected successful restart result")
 	}
-	if len(runner.commands) != 2 {
-		t.Fatalf("expected network inspect + compose up, got %d commands", len(runner.commands))
+	if len(runner.commands) != 1 {
+		t.Fatalf("expected compose restart, got %d commands", len(runner.commands))
 	}
-	if got := strings.Join(runner.commands[1], " "); !strings.Contains(got, "compose") || !strings.Contains(got, "--force-recreate") {
-		t.Fatalf("restart command = %q, want compose recreate command", got)
-	}
-	if got := strings.Join(runner.commands[1], " "); strings.Contains(got, " restart ") {
-		t.Fatalf("restart command = %q, should not use docker restart", got)
+	if got := strings.Join(runner.commands[0], " "); !strings.Contains(got, "compose") || !strings.Contains(got, " restart") {
+		t.Fatalf("restart command = %q, want compose restart command", got)
 	}
 	if len(result.Containers) != 1 || result.Containers[0].Health != "healthy" {
 		t.Fatalf("restart containers = %#v, want healthy ollama container", result.Containers)
@@ -491,6 +546,9 @@ func TestRestartServiceUsesDeployLifecycle(t *testing.T) {
 	}
 	if len(history) != 1 || history[0].ArtifactVersion != "ollama/ollama:0.6.0" {
 		t.Fatalf("deployment history = %#v, want restarted service image recorded", history)
+	}
+	if history[0].Operation != "service_restart" {
+		t.Fatalf("deployment operation = %q, want service_restart", history[0].Operation)
 	}
 }
 
@@ -546,7 +604,7 @@ func TestGatewayUpdateStartsHelperContainer(t *testing.T) {
 		t.Fatalf("expected network inspect/create + helper run, got %d commands", len(runner.commands))
 	}
 	got := strings.Join(runner.commands[2], " ")
-	if !strings.Contains(got, "run --rm") || !strings.Contains(got, "moltbox-gateway:latest") || !strings.Contains(got, "golang:1.23-bookworm") || !strings.Contains(got, "/usr/local/go/bin/go build -buildvcs=false -o /out/moltbox") || !strings.Contains(got, `git config --global --add safe.directory "$REPO"`) || !strings.Contains(got, "remote get-url origin") || !strings.Contains(got, `gateway update requires a git checkout at $REPO`) || !strings.Contains(got, `install_cli() { TARGET="$1"; TMP="${TARGET}.tmp.$$"; cp "$STAGING_ROOT/moltbox" "$TMP"; chmod 0755 "$TMP"; mv -f "$TMP" "$TARGET"; }`) || !strings.Contains(got, `install_cli "$CLI_PATH"`) || !strings.Contains(got, `if [ "$SHARED_CLI_PATH" != "$CLI_PATH" ]; then install_cli "$SHARED_CLI_PATH"; fi`) || !strings.Contains(got, "cp \"$CONFIG_SOURCE\" \"$SYSTEM_CONFIG_PATH\"") || !strings.Contains(got, "chown -R \"$CLI_OWNER\" \"$SECRETS_ROOT\"") || !strings.Contains(got, "moltbox-cli-wrapper.sh") || !strings.Contains(got, "CLI_WRAPPER_PATH") || !strings.Contains(got, "moltbox-bootstrap-wrapper.sh") || !strings.Contains(got, "BOOTSTRAP_WRAPPER_PATH") || !strings.Contains(got, "/usr/local/bin:/usr/local/bin") || !strings.Contains(got, "/etc/moltbox:/etc/moltbox") || !strings.Contains(got, "/var/lib/moltbox:/var/lib/moltbox") || !strings.Contains(got, `HISTORY_PATH='/var/lib/moltbox/history.jsonl'`) || !strings.Contains(got, `sha256sum "$STAGING_ROOT/gateway"`) {
+	if !strings.Contains(got, "run --rm") || !strings.Contains(got, "moltbox-gateway:latest") || !strings.Contains(got, "golang:1.23-bookworm") || !strings.Contains(got, "/usr/local/go/bin/go build -buildvcs=false -o /out/moltbox") || !strings.Contains(got, `git config --global --add safe.directory "$REPO"`) || !strings.Contains(got, "remote get-url origin") || !strings.Contains(got, `gateway update requires a git checkout at $REPO`) || !strings.Contains(got, `install_cli() { TARGET="$1"; TMP="${TARGET}.tmp.$$"; cp "$STAGING_ROOT/moltbox" "$TMP"; chmod 0755 "$TMP"; mv -f "$TMP" "$TARGET"; }`) || !strings.Contains(got, `install_cli "$CLI_PATH"`) || !strings.Contains(got, `if [ "$SHARED_CLI_PATH" != "$CLI_PATH" ]; then install_cli "$SHARED_CLI_PATH"; fi`) || !strings.Contains(got, "cp \"$CONFIG_SOURCE\" \"$SYSTEM_CONFIG_PATH\"") || !strings.Contains(got, "chown -R \"$CLI_OWNER\" \"$SECRETS_ROOT\"") || !strings.Contains(got, "moltbox-test-operator-wrapper.sh") || !strings.Contains(got, "TEST_WRAPPER_PATH") || !strings.Contains(got, "moltbox-prod-operator-wrapper.sh") || !strings.Contains(got, "PROD_WRAPPER_PATH") || !strings.Contains(got, "moltbox-bootstrap-wrapper.sh") || !strings.Contains(got, "BOOTSTRAP_WRAPPER_PATH") || !strings.Contains(got, "/usr/local/bin:/usr/local/bin") || !strings.Contains(got, "/etc/moltbox:/etc/moltbox") || !strings.Contains(got, "/var/lib/moltbox:/var/lib/moltbox") || !strings.Contains(got, `HISTORY_PATH='/var/lib/moltbox/history.jsonl'`) || !strings.Contains(got, `sha256sum "$STAGING_ROOT/gateway"`) {
 		t.Fatalf("gateway update helper command = %q", got)
 	}
 

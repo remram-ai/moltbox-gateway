@@ -17,26 +17,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/service/list", s.handleServiceList)
-	mux.HandleFunc("/docker/ping", s.handleDockerPing)
-	mux.HandleFunc("/docker/run", s.handleDockerRun)
 	mux.HandleFunc("/service/status", s.handleServiceStatus)
 	mux.HandleFunc("/service/deploy", s.handleServiceDeploy)
 	mux.HandleFunc("/service/restart", s.handleServiceRestart)
+	mux.HandleFunc("/service/remove", s.handleServiceRemove)
 	mux.HandleFunc("/service/logs", s.handleServiceLogs)
 	mux.HandleFunc("/service/passthrough", s.handleServicePassthrough)
 	mux.HandleFunc("/logs", s.handleGatewayLogs)
 	mux.HandleFunc("/update", s.handleGatewayUpdate)
-	mux.HandleFunc("/runtime/reload", s.handleRuntimeReload)
-	mux.HandleFunc("/runtime/checkpoint", s.handleRuntimeCheckpoint)
-	mux.HandleFunc("/runtime/skill/list", s.handleRuntimeSkillList)
-	mux.HandleFunc("/runtime/skill/deploy", s.handleRuntimeSkillDeploy)
-	mux.HandleFunc("/runtime/skill/remove", s.handleRuntimeSkillRemove)
-	mux.HandleFunc("/runtime/skill/rollback", s.handleRuntimeSkillRollback)
-	mux.HandleFunc("/runtime/plugin/list", s.handleRuntimePluginList)
-	mux.HandleFunc("/runtime/plugin/install", s.handleRuntimePluginInstall)
-	mux.HandleFunc("/runtime/plugin/remove", s.handleRuntimePluginRemove)
 	mux.HandleFunc("/runtime/openclaw", s.handleRuntimeOpenClaw)
-	mux.HandleFunc("/runtime/", s.handleRuntimeREST)
 	mux.HandleFunc("/token/create", s.handleTokenCreate)
 	mux.HandleFunc("/token/list", s.handleTokenList)
 	mux.HandleFunc("/token/delete", s.handleTokenDelete)
@@ -78,84 +67,6 @@ func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request)
 		Version:       cli.Version,
 		ListenAddress: s.listenAddress,
 		DockerSocket:  s.dockerSocketPath,
-	})
-}
-
-func (s *Server) handleDockerPing(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use GET /docker/ping"))
-		return
-	}
-
-	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayDocker, Action: "ping", Subject: "docker"}
-
-	ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
-	defer cancel()
-
-	info, err := s.dockerClient.Version(ctx)
-	if err != nil {
-		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
-			route,
-			"docker_unavailable",
-			fmt.Sprintf("failed to contact Docker via %s", s.dockerSocketPath),
-			"verify the gateway container has the Docker socket mounted",
-		))
-		return
-	}
-
-	s.writeJSON(writer, http.StatusOK, cli.DockerPingResult{
-		OK:            true,
-		Route:         route,
-		DockerVersion: info.Version,
-		APIVersion:    info.APIVersion,
-		MinAPIVersion: info.MinAPIVersion,
-		GitCommit:     info.GitCommit,
-		GoVersion:     info.GoVersion,
-		OS:            info.OS,
-		Arch:          info.Arch,
-		KernelVersion: info.KernelVersion,
-	})
-}
-
-func (s *Server) handleDockerRun(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /docker/run"))
-		return
-	}
-
-	var payload cli.DockerRunRequest
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-		s.writeJSON(writer, http.StatusBadRequest, cli.Error(nil, "parse_error", "invalid JSON request body", "send JSON with an image field"))
-		return
-	}
-
-	image := strings.TrimSpace(payload.Image)
-	route := &cli.Route{Resource: "gateway", Kind: cli.KindGatewayDocker, Action: "run", Subject: image}
-	if image == "" {
-		s.writeJSON(writer, http.StatusBadRequest, cli.Error(route, "parse_error", "missing image name", "use: gateway docker run <image>"))
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
-	defer cancel()
-
-	result, err := s.dockerClient.RunImage(ctx, image)
-	if err != nil {
-		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
-			route,
-			"docker_run_failed",
-			fmt.Sprintf("failed to run image '%s'", image),
-			err.Error(),
-		))
-		return
-	}
-
-	s.writeJSON(writer, http.StatusOK, cli.DockerRunResult{
-		OK:            true,
-		Route:         route,
-		Image:         image,
-		ContainerID:   result.ID,
-		ContainerName: result.Name,
 	})
 }
 
@@ -292,6 +203,34 @@ func (s *Server) handleServiceRestart(writer http.ResponseWriter, request *http.
 			route,
 			"service_restart_failed",
 			fmt.Sprintf("failed to restart service '%s'", route.Subject),
+			err.Error(),
+		))
+		return
+	}
+
+	s.writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleServiceRemove(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /service/remove"))
+		return
+	}
+
+	route, ok := s.parseServiceRouteRequest(writer, request, "remove")
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(request.Context(), 45*time.Second)
+	defer cancel()
+
+	result, err := s.orchestrator.RemoveService(ctx, route, route.Subject)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			route,
+			"service_remove_failed",
+			fmt.Sprintf("failed to remove service '%s'", route.Subject),
 			err.Error(),
 		))
 		return

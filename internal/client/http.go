@@ -41,6 +41,8 @@ func (c *HTTPClient) Execute(route *cli.Route, secretValue string) ([]byte, erro
 		return c.post("/service/deploy", cli.RouteRequest{Route: route, Service: route.Subject})
 	case route.Kind == cli.KindService && route.Action == "restart":
 		return c.post("/service/restart", cli.RouteRequest{Route: route, Service: route.Subject})
+	case route.Kind == cli.KindService && route.Action == "remove":
+		return c.post("/service/remove", cli.RouteRequest{Route: route, Service: route.Subject})
 	case route.Kind == cli.KindService && route.Action == "logs":
 		query := url.Values{}
 		query.Set("service", route.Subject)
@@ -49,22 +51,6 @@ func (c *HTTPClient) Execute(route *cli.Route, secretValue string) ([]byte, erro
 		return c.get("/logs")
 	case route.Kind == cli.KindGateway && route.Action == "update":
 		return c.post("/update", cli.RouteRequest{Route: route, Service: "gateway"})
-	case route.Kind == cli.KindRuntimeAction && route.Action == "reload":
-		return c.post("/runtime/reload", cli.RouteRequest{Route: route})
-	case route.Kind == cli.KindRuntimeAction && route.Action == "checkpoint":
-		return c.post("/runtime/checkpoint", cli.RouteRequest{Route: route})
-	case route.Kind == cli.KindRuntimeSkill && route.Action == "list":
-		return c.post("/runtime/skill/list", cli.RouteRequest{Route: route})
-	case route.Kind == cli.KindRuntimeSkill && route.Action == "deploy":
-		return c.post("/runtime/skill/deploy", cli.RouteRequest{Route: route})
-	case route.Kind == cli.KindRuntimeSkill && route.Action == "remove":
-		return c.post("/runtime/skill/remove", cli.RouteRequest{Route: route})
-	case route.Kind == cli.KindRuntimePlugin && route.Action == "list":
-		return c.get(runtimePluginPath(route))
-	case route.Kind == cli.KindRuntimePlugin && route.Action == "install":
-		return c.post(runtimePluginPath(route)+"/install", cli.RouteRequest{Route: route})
-	case route.Kind == cli.KindRuntimePlugin && route.Action == "remove":
-		return c.delete(runtimePluginPath(route) + "/" + url.PathEscape(strings.TrimSpace(route.Subject)))
 	case route.Kind == cli.KindRuntimeNative:
 		return c.post("/runtime/openclaw", cli.RouteRequest{Route: route})
 	case route.Kind == cli.KindServiceNative:
@@ -105,14 +91,6 @@ func (c *HTTPClient) delete(path string) ([]byte, error) {
 	}
 
 	return c.do(request)
-}
-
-func runtimePluginPath(route *cli.Route) string {
-	environment := strings.TrimSpace(route.Environment)
-	if environment == "" {
-		environment = strings.TrimSpace(route.Resource)
-	}
-	return "/runtime/" + url.PathEscape(environment) + "/plugins"
 }
 
 func (c *HTTPClient) do(request *http.Request) ([]byte, error) {

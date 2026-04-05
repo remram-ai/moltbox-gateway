@@ -80,10 +80,22 @@ func isRuntimeService(service string) bool {
 	}
 }
 
+func isManagedPetRuntime(service string) bool {
+	switch canonicalServiceName(service) {
+	case "openclaw-test", "openclaw-prod":
+		return true
+	default:
+		return false
+	}
+}
+
 func (m *Manager) prepareRuntimeDeploy(_ context.Context, route *cli.Route, service string) error {
 	destination := m.config.RuntimeComponentDir(service)
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return fmt.Errorf("create runtime state dir for %s: %w", service, err)
+	}
+	if err := m.syncRuntimeManagedState(service, destination); err != nil {
+		return fmt.Errorf("sync runtime managed state for %s: %w", service, err)
 	}
 	if err := m.syncRuntimeWorkspaceBaseline(service, destination); err != nil {
 		return fmt.Errorf("sync runtime workspace baseline for %s: %w", service, err)
@@ -102,6 +114,42 @@ var managedRuntimeWorkspaceFiles = []string{
 	"USER.md",
 	"HEARTBEAT.md",
 	"BOOTSTRAP.md",
+}
+
+var managedRuntimeRootFiles = []string{
+	"openclaw.json.template",
+	"model-runtime.yml",
+}
+
+func (m *Manager) syncRuntimeManagedState(service, runtimeRoot string) error {
+	sourceRoot := filepath.Join(m.config.RuntimeRepoRoot(), canonicalServiceName(service))
+	context := m.renderContext(service)
+	for _, name := range managedRuntimeRootFiles {
+		sourcePath := filepath.Join(sourceRoot, name)
+		info, err := os.Stat(sourcePath)
+		if err != nil {
+			if errorsIsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if info.IsDir() {
+			continue
+		}
+
+		destinationName := strings.TrimSuffix(name, ".template")
+		destinationPath := filepath.Join(runtimeRoot, destinationName)
+		if strings.HasSuffix(name, ".template") {
+			if err := renderFile(sourcePath, destinationPath, context); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyFile(sourcePath, destinationPath); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) syncRuntimeWorkspaceBaseline(service, runtimeRoot string) error {
@@ -321,6 +369,53 @@ func (m *Manager) RuntimePluginInstall(ctx context.Context, route *cli.Route) (c
 		return cli.RuntimePluginResult{}, err
 	}
 
+	baselineDigest, baselineCheckpointID, err := m.baselinePluginDigest(service, plugin.Name)
+	if err != nil {
+		return cli.RuntimePluginResult{}, err
+	}
+	currentPlugin, currentPluginPresent, err := m.effectivePluginState(service, plugin.Name)
+	if err != nil {
+		return cli.RuntimePluginResult{}, err
+	}
+	if baselineDigest != "" && currentPluginPresent && strings.TrimSpace(currentPlugin.Digest) == baselineDigest {
+		log, err := m.stateStore.LoadReplayLog(service)
+		if err != nil {
+			return cli.RuntimePluginResult{}, err
+		}
+		return cli.RuntimePluginResult{
+			OK:          true,
+			Route:       route,
+			Runtime:     service,
+			Plugin:      currentPlugin.Name,
+			Package:     currentPlugin.Package,
+			Version:     currentPlugin.Version,
+			Digest:      currentPlugin.Digest,
+			Source:      currentPlugin.Source,
+			Action:      route.Action,
+			Message:     fmt.Sprintf("plugin %q is already present in baseline checkpoint %s for %s", currentPlugin.Name, baselineCheckpointID, service),
+			ReplayCount: len(log.Events),
+		}, nil
+	}
+	if currentPluginPresent && strings.TrimSpace(currentPlugin.Digest) != "" && strings.TrimSpace(currentPlugin.Digest) == strings.TrimSpace(plugin.Digest) {
+		log, err := m.stateStore.LoadReplayLog(service)
+		if err != nil {
+			return cli.RuntimePluginResult{}, err
+		}
+		return cli.RuntimePluginResult{
+			OK:          true,
+			Route:       route,
+			Runtime:     service,
+			Plugin:      currentPlugin.Name,
+			Package:     currentPlugin.Package,
+			Version:     currentPlugin.Version,
+			Digest:      currentPlugin.Digest,
+			Source:      currentPlugin.Source,
+			Action:      route.Action,
+			Message:     fmt.Sprintf("plugin %q is already present in runtime %s", currentPlugin.Name, service),
+			ReplayCount: len(log.Events),
+		}, nil
+	}
+
 	deploymentID := newGatewayID("deploy")
 	eventID := newGatewayID("event")
 	timestamp := time.Now().UTC().Format(time.RFC3339)
@@ -378,11 +473,6 @@ func (m *Manager) RuntimePluginInstall(ctx context.Context, route *cli.Route) (c
 		return cli.RuntimePluginResult{}, err
 	}
 
-	baselineDigest, baselineCheckpointID, err := m.baselinePluginDigest(service, plugin.Name)
-	if err != nil {
-		restoreRuntime()
-		return cli.RuntimePluginResult{}, err
-	}
 	previousDigest, err := m.effectivePluginDigest(service, installedPlugin.Name)
 	if err != nil {
 		restoreRuntime()
@@ -1391,6 +1481,9 @@ func (m *Manager) selectedRuntimeImage(service string) string {
 	if !isRuntimeService(service) {
 		return ""
 	}
+	if service == "openclaw-test" || service == "openclaw-prod" {
+		return ""
+	}
 	checkpoint, ok, err := m.stateStore.LoadCheckpoint(service)
 	if err != nil || !ok {
 		return ""
@@ -1399,6 +1492,17 @@ func (m *Manager) selectedRuntimeImage(service string) string {
 }
 
 func (m *Manager) recordServiceDeployment(route *cli.Route, service string, containers []cli.ServiceContainerStatus, result string, details map[string]string) error {
+	operation := "service_deploy"
+	if details != nil {
+		if value := strings.TrimSpace(details["operation"]); value != "" {
+			operation = value
+			details = mergeDetailMaps(details)
+			delete(details, "operation")
+			if len(details) == 0 {
+				details = nil
+			}
+		}
+	}
 	record := deploystate.DeploymentRecord{
 		DeploymentID:    newGatewayID("deploy"),
 		Timestamp:       time.Now().UTC().Format(time.RFC3339),
@@ -1406,7 +1510,7 @@ func (m *Manager) recordServiceDeployment(route *cli.Route, service string, cont
 		Target:          service,
 		ArtifactVersion: m.currentServiceArtifactVersion(service, containers),
 		Result:          result,
-		Operation:       "service_deploy",
+		Operation:       operation,
 		Details:         details,
 		Runtime: func() string {
 			if isRuntimeService(service) {

@@ -2,15 +2,15 @@
 set -eu
 
 if [ "$#" -ne 5 ]; then
-  printf '%s\n' "usage: provision-automation-ssh.sh <jason-codex.pub> <codex-bootstrap.pub> <cli-path> <cli-wrapper-path> <bootstrap-wrapper-path>" >&2
+  printf '%s\n' "usage: provision-automation-ssh.sh <moltbox-ai-test.pub> <moltbox-ai-prod.pub> <cli-path> <test-wrapper-path> <prod-wrapper-path>" >&2
   exit 2
 fi
 
-JASON_CODEX_KEY_PATH="$1"
-BOOTSTRAP_KEY_PATH="$2"
+TEST_KEY_PATH="$1"
+PROD_KEY_PATH="$2"
 CLI_PATH="$3"
-CLI_WRAPPER_PATH="$4"
-BOOTSTRAP_WRAPPER_PATH="$5"
+TEST_WRAPPER_PATH="$4"
+PROD_WRAPPER_PATH="$5"
 
 ensure_user() {
   user="$1"
@@ -37,7 +37,7 @@ upsert_key_entry() {
   tmp_file="$(mktemp)"
 
   if [ -f "$auth_file" ]; then
-    grep -Fv "$public_key" "$auth_file" > "$tmp_file" || true
+    tr -d '\r' < "$auth_file" | grep -Fv "$public_key" > "$tmp_file" || true
   fi
   printf '%s\n' "$entry" >> "$tmp_file"
   mv "$tmp_file" "$auth_file"
@@ -46,14 +46,14 @@ upsert_key_entry() {
   chmod 600 "$auth_file"
 }
 
-ensure_user "jason-codex"
-ensure_user "codex-bootstrap"
+ensure_user "moltbox-ai-test"
+ensure_user "moltbox-ai-prod"
 
-jason_key="$(cat "$JASON_CODEX_KEY_PATH")"
-bootstrap_key="$(cat "$BOOTSTRAP_KEY_PATH")"
+test_key="$(tr -d '\r' < "$TEST_KEY_PATH")"
+prod_key="$(tr -d '\r' < "$PROD_KEY_PATH")"
 
-jason_entry="command=\"$CLI_WRAPPER_PATH\",restrict,no-port-forwarding,no-agent-forwarding,no-pty,no-X11-forwarding $jason_key"
-bootstrap_entry="command=\"$BOOTSTRAP_WRAPPER_PATH\",restrict,no-port-forwarding,no-agent-forwarding,no-pty,no-X11-forwarding $bootstrap_key"
+test_entry="command=\"$TEST_WRAPPER_PATH\",restrict,no-port-forwarding,no-agent-forwarding,no-pty,no-X11-forwarding $test_key"
+prod_entry="command=\"$PROD_WRAPPER_PATH\",restrict,no-port-forwarding,no-agent-forwarding,no-pty,no-X11-forwarding $prod_key"
 
-upsert_key_entry "jason-codex" "$jason_key" "$jason_entry"
-upsert_key_entry "codex-bootstrap" "$bootstrap_key" "$bootstrap_entry"
+upsert_key_entry "moltbox-ai-test" "$test_key" "$test_entry"
+upsert_key_entry "moltbox-ai-prod" "$prod_key" "$prod_entry"

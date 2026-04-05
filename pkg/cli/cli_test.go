@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -60,10 +61,10 @@ func TestParseServiceContract(t *testing.T) {
 		},
 		{
 			name:        "service deploy",
-			args:        []string{"service", "deploy", "prod"},
+			args:        []string{"service", "deploy", "searxng"},
 			wantKind:    KindService,
 			wantAction:  "deploy",
-			wantSubject: "prod",
+			wantSubject: "searxng",
 		},
 		{
 			name:        "service restart",
@@ -74,10 +75,17 @@ func TestParseServiceContract(t *testing.T) {
 		},
 		{
 			name:        "service logs",
-			args:        []string{"service", "logs", "ollama"},
+			args:        []string{"service", "logs", "searxng"},
 			wantKind:    KindService,
 			wantAction:  "logs",
-			wantSubject: "ollama",
+			wantSubject: "searxng",
+		},
+		{
+			name:        "service remove",
+			args:        []string{"service", "remove", "test"},
+			wantKind:    KindService,
+			wantAction:  "remove",
+			wantSubject: "test",
 		},
 	}
 
@@ -244,10 +252,51 @@ func TestParseGatewayLegacySurfacesFailExplicitly(t *testing.T) {
 	}
 }
 
+func TestWriteHelpServiceListsCurrentServices(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := WriteHelp(&out, "service"); err != nil {
+		t.Fatalf("WriteHelp(service): %v", err)
+	}
+
+	text := out.String()
+	for _, needle := range []string{"gateway", "caddy", "ollama", "searxng", "test", "prod"} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("service help missing %q in %q", needle, text)
+		}
+	}
+}
+
+func TestWriteHelpGlobalDocumentsLightweightSurface(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := WriteHelp(&out, "global"); err != nil {
+		t.Fatalf("WriteHelp(global): %v", err)
+	}
+
+	text := out.String()
+	for _, needle := range []string{
+		"bootstrap",
+		"gateway",
+		"service",
+		"test|prod",
+		"ollama",
+		"secret",
+		"gateway docker",
+		"gateway service",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("global help missing %q in %q", needle, text)
+		}
+	}
+}
+
 func TestValidatePublicServiceRejectsGatewayMutations(t *testing.T) {
 	t.Parallel()
 
-	for _, action := range []string{"deploy", "restart"} {
+	for _, action := range []string{"deploy", "restart", "remove"} {
 		if errEnvelope := validatePublicService(action, "gateway"); errEnvelope == nil {
 			t.Fatalf("validatePublicService(%q, gateway) = nil, want error", action)
 		}

@@ -69,6 +69,7 @@ func TestCLIForwardsLightweightPublicSurface(t *testing.T) {
 					Route: &cli.Route{Resource: "service", Kind: cli.KindService, Action: "list"},
 					Services: []cli.ServiceListItem{
 						{Service: "gateway", CanonicalName: "gateway", Running: true, Health: "healthy"},
+						{Service: "searxng", CanonicalName: "searxng", Running: true, Health: "healthy"},
 						{Service: "test", CanonicalName: "openclaw-test", Running: true, Health: "healthy"},
 					},
 				})
@@ -118,7 +119,7 @@ func TestCLIForwardsLightweightPublicSurface(t *testing.T) {
 		},
 		{
 			name:       "service restart",
-			args:       []string{"service", "restart", "caddy"},
+			args:       []string{"service", "restart", "searxng"},
 			wantMethod: http.MethodPost,
 			wantPath:   "/service/restart",
 			wantCode:   cli.ExitOK,
@@ -128,14 +129,37 @@ func TestCLIForwardsLightweightPublicSurface(t *testing.T) {
 				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 					t.Fatalf("decode request: %v", err)
 				}
-				if payload.Service != "caddy" {
-					t.Fatalf("payload.service = %q, want caddy", payload.Service)
+				if payload.Service != "searxng" {
+					t.Fatalf("payload.service = %q, want searxng", payload.Service)
 				}
 				_ = json.NewEncoder(writer).Encode(cli.ServiceActionResult{
 					OK:      true,
 					Route:   payload.Route,
-					Service: "caddy",
+					Service: "searxng",
 					Action:  "restart",
+				})
+			},
+		},
+		{
+			name:       "service remove",
+			args:       []string{"service", "remove", "searxng"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/service/remove",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if payload.Service != "searxng" {
+					t.Fatalf("payload.service = %q, want searxng", payload.Service)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.ServiceActionResult{
+					OK:      true,
+					Route:   payload.Route,
+					Service: "searxng",
+					Action:  "remove",
 				})
 			},
 		},
@@ -557,7 +581,7 @@ func TestSSHWrapperModePreservesQuotedArgs(t *testing.T) {
 
 	var stdout strings.Builder
 	code := run([]string{
-		"__ssh-wrapper=automation",
+		"__ssh-wrapper=test-operator",
 		`moltbox test openclaw agent --agent main --local --thinking off --message Say hello in one sentence. --json`,
 	}, &stdout, ioDiscard{})
 	if code != cli.ExitOK {
@@ -616,7 +640,7 @@ func TestSSHWrapperModePreservesQuotedSecretValue(t *testing.T) {
 
 	var stdout strings.Builder
 	code := run([]string{
-		"__ssh-wrapper=automation",
+		"__ssh-wrapper=test-operator",
 		`moltbox secret set test TEST_SECRET value with spaces`,
 	}, &stdout, ioDiscard{})
 	if code != cli.ExitOK {
@@ -629,7 +653,7 @@ func TestSSHWrapperModeRejectsShellOperators(t *testing.T) {
 
 	var stderr strings.Builder
 	code := run([]string{
-		"__ssh-wrapper=automation",
+		"__ssh-wrapper=test-operator",
 		`moltbox test openclaw health --json; whoami`,
 	}, ioDiscard{}, &stderr)
 	if code != cli.ExitFailure {

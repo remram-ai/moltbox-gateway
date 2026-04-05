@@ -25,7 +25,6 @@ const (
 	KindGateway        = "gateway"
 	KindService        = "service"
 	KindGatewayService = "gateway_service"
-	KindGatewayDocker  = "gateway_docker"
 	KindGatewayMCP     = "gateway_mcp"
 	KindGatewayToken   = "gateway_token"
 	KindScopedSecrets  = "scoped_secrets"
@@ -56,11 +55,12 @@ var runtimeMappings = map[string]string{
 }
 
 var publicServices = map[string]string{
-	"gateway": "gateway",
-	"caddy":   "caddy",
-	"ollama":  "ollama",
-	"test":    "openclaw-test",
-	"prod":    "openclaw-prod",
+	"gateway":    "gateway",
+	"caddy":      "caddy",
+	"ollama":     "ollama",
+	"searxng":    "searxng",
+	"test":       "openclaw-test",
+	"prod":       "openclaw-prod",
 }
 
 var secretScopes = map[string]struct{}{
@@ -105,10 +105,6 @@ type SecretDeleteRequest struct {
 	Name  string `json:"name"`
 }
 
-type DockerRunRequest struct {
-	Image string `json:"image"`
-}
-
 type GatewayHealthResult struct {
 	OK      bool   `json:"ok"`
 	Service string `json:"service"`
@@ -122,27 +118,6 @@ type GatewayStatusResult struct {
 	Version       string `json:"version"`
 	ListenAddress string `json:"listen_address"`
 	DockerSocket  string `json:"docker_socket"`
-}
-
-type DockerPingResult struct {
-	OK            bool   `json:"ok"`
-	Route         *Route `json:"route"`
-	DockerVersion string `json:"docker_version"`
-	APIVersion    string `json:"api_version,omitempty"`
-	MinAPIVersion string `json:"min_api_version,omitempty"`
-	GitCommit     string `json:"git_commit,omitempty"`
-	GoVersion     string `json:"go_version,omitempty"`
-	OS            string `json:"os,omitempty"`
-	Arch          string `json:"arch,omitempty"`
-	KernelVersion string `json:"kernel_version,omitempty"`
-}
-
-type DockerRunResult struct {
-	OK            bool   `json:"ok"`
-	Route         *Route `json:"route"`
-	Image         string `json:"image"`
-	ContainerID   string `json:"container_id"`
-	ContainerName string `json:"container_name"`
 }
 
 type ServiceStatusResult struct {
@@ -507,7 +482,7 @@ func parseService(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				"missing service command",
-				"use: service list | service status <service> | service deploy <service> | service restart <service> | service logs <service>",
+				"use: service list | service status <service> | service deploy <service> | service restart <service> | service remove <service> | service logs <service>",
 			),
 			Code: ExitParseError,
 		}
@@ -533,7 +508,7 @@ func parseService(args []string) ParseResult {
 				Action:   "list",
 			},
 		}
-	case "status", "deploy", "restart", "logs":
+	case "status", "deploy", "restart", "remove", "logs":
 		if len(args) != 3 {
 			return ParseResult{
 				Envelope: Error(nil,
@@ -571,7 +546,7 @@ func parseService(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown service command '%s'", args[1]),
-				"use: service list | service status <service> | service deploy <service> | service restart <service> | service logs <service>",
+				"use: service list | service status <service> | service deploy <service> | service restart <service> | service remove <service> | service logs <service>",
 			),
 			Code: ExitParseError,
 		}
@@ -898,10 +873,10 @@ func validatePublicService(action, service string) *Envelope {
 		return Error(nil,
 			"parse_error",
 			fmt.Sprintf("unknown service '%s'", service),
-			"use one of: gateway, caddy, ollama, test, prod",
+			"use one of: gateway, caddy, ollama, searxng, test, prod",
 		)
 	}
-	if service == "gateway" && (action == "deploy" || action == "restart") {
+	if service == "gateway" && (action == "deploy" || action == "restart" || action == "remove") {
 		return Error(nil,
 			"parse_error",
 			fmt.Sprintf("service %s gateway is not supported", action),
@@ -930,6 +905,7 @@ Resources:
     status <service>
     deploy <service>
     restart <service>
+    remove <service>
     logs <service>
 
   test|prod
@@ -970,12 +946,14 @@ Commands:
   status <service>
   deploy <service>
   restart <service>
+  remove <service>
   logs <service>
 
 Services:
   gateway
   caddy
   ollama
+  searxng
   test
   prod
 `,

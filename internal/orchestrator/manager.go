@@ -59,6 +59,7 @@ var managedPublicServices = []string{
 	"gateway",
 	"caddy",
 	"ollama",
+	"searxng",
 	"test",
 	"prod",
 }
@@ -97,15 +98,20 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 		return cli.ServiceDeployResult{}, err
 	}
 
+	outputDir, commandArgs, err := m.RenderServiceAssets(canonicalService, definition)
+	if err != nil {
+		return cli.ServiceDeployResult{}, err
+	}
+
 	if isRuntimeService(canonicalService) {
 		if err := m.prepareRuntimeDeploy(ctx, route, canonicalService); err != nil {
 			return cli.ServiceDeployResult{}, err
 		}
-	}
-
-	outputDir, commandArgs, err := m.RenderServiceAssets(canonicalService, definition)
-	if err != nil {
-		return cli.ServiceDeployResult{}, err
+		if !isManagedPetRuntime(canonicalService) {
+			if err := m.replayRuntimeDeployHistory(ctx, route, canonicalService); err != nil {
+				return cli.ServiceDeployResult{}, err
+			}
+		}
 	}
 
 	if err := m.ensureNetwork(ctx); err != nil {
@@ -133,12 +139,6 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 	containers, err := m.waitForContainers(ctx, definition.ContainerNames, 2*time.Minute)
 	if err != nil {
 		return cli.ServiceDeployResult{}, err
-	}
-
-	if isRuntimeService(canonicalService) {
-		if err := m.replayRuntimeDeployHistory(ctx, route, canonicalService); err != nil {
-			return cli.ServiceDeployResult{}, err
-		}
 	}
 
 	if err := m.recordServiceDeployment(route, canonicalService, containers, "success", snapshotRecord.DetailMap()); err != nil {
@@ -302,7 +302,8 @@ func (m *Manager) GatewayUpdate(ctx context.Context, route *cli.Route) (cli.Serv
 }
 
 func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigPath, updateScript, historyPath, operator string) []string {
-	cliWrapperPath := "/usr/local/bin/moltbox-cli-wrapper"
+	testWrapperPath := "/usr/local/bin/moltbox-test-operator-wrapper"
+	prodWrapperPath := "/usr/local/bin/moltbox-prod-operator-wrapper"
 	bootstrapWrapperPath := "/usr/local/bin/moltbox-bootstrap-wrapper"
 	systemConfigPath := "/etc/moltbox/config.yaml"
 	commandArgs := []string{
@@ -322,7 +323,8 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 		filepath.Dir(cliPath),
 		filepath.Dir(cliConfigPath),
 		path.Dir(historyPath),
-		path.Dir(cliWrapperPath),
+		path.Dir(testWrapperPath),
+		path.Dir(prodWrapperPath),
 		path.Dir(bootstrapWrapperPath),
 		path.Dir(systemConfigPath),
 	) {
@@ -340,8 +342,10 @@ func gatewayUpdateHelperCommand(cfg config.Config, repoRoot, cliPath, cliConfigP
 }
 
 func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, configSource, gatewayOutputDir, composeProject, secretsRoot, historyPath string) string {
-	cliWrapperSource := filepath.Join(repoRoot, "scripts", "moltbox-cli-wrapper.sh")
-	cliWrapperPath := "/usr/local/bin/moltbox-cli-wrapper"
+	testWrapperSource := filepath.Join(repoRoot, "scripts", "moltbox-test-operator-wrapper.sh")
+	testWrapperPath := "/usr/local/bin/moltbox-test-operator-wrapper"
+	prodWrapperSource := filepath.Join(repoRoot, "scripts", "moltbox-prod-operator-wrapper.sh")
+	prodWrapperPath := "/usr/local/bin/moltbox-prod-operator-wrapper"
 	bootstrapWrapperSource := filepath.Join(repoRoot, "scripts", "moltbox-bootstrap-wrapper.sh")
 	bootstrapWrapperPath := "/usr/local/bin/moltbox-bootstrap-wrapper"
 	sharedCLIPath := "/usr/local/bin/moltbox"
@@ -356,8 +360,10 @@ func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, con
 		fmt.Sprintf("GATEWAY_OUTPUT_DIR=%s", shellQuote(gatewayOutputDir)),
 		fmt.Sprintf("COMPOSE_PROJECT=%s", shellQuote(composeProject)),
 		fmt.Sprintf("SECRETS_ROOT=%s", shellQuote(secretsRoot)),
-		fmt.Sprintf("CLI_WRAPPER_SOURCE=%s", shellQuote(cliWrapperSource)),
-		fmt.Sprintf("CLI_WRAPPER_PATH=%s", shellQuote(cliWrapperPath)),
+		fmt.Sprintf("TEST_WRAPPER_SOURCE=%s", shellQuote(testWrapperSource)),
+		fmt.Sprintf("TEST_WRAPPER_PATH=%s", shellQuote(testWrapperPath)),
+		fmt.Sprintf("PROD_WRAPPER_SOURCE=%s", shellQuote(prodWrapperSource)),
+		fmt.Sprintf("PROD_WRAPPER_PATH=%s", shellQuote(prodWrapperPath)),
 		fmt.Sprintf("BOOTSTRAP_WRAPPER_SOURCE=%s", shellQuote(bootstrapWrapperSource)),
 		fmt.Sprintf("BOOTSTRAP_WRAPPER_PATH=%s", shellQuote(bootstrapWrapperPath)),
 		fmt.Sprintf("SHARED_CLI_PATH=%s", shellQuote(sharedCLIPath)),
@@ -382,8 +388,10 @@ func buildGatewayUpdateScript(repoRoot, stagingRoot, cliPath, cliConfigPath, con
 		`chmod 0644 "$CLI_CONFIG_PATH"`,
 		`cp "$CONFIG_SOURCE" "$SYSTEM_CONFIG_PATH"`,
 		`chmod 0644 "$SYSTEM_CONFIG_PATH"`,
-		`sed "s|__MOLTBOX_CLI_PATH__|$SHARED_CLI_PATH|g" "$CLI_WRAPPER_SOURCE" > "$CLI_WRAPPER_PATH"`,
-		`chmod 0755 "$CLI_WRAPPER_PATH"`,
+		`sed "s|__MOLTBOX_CLI_PATH__|$SHARED_CLI_PATH|g" "$TEST_WRAPPER_SOURCE" > "$TEST_WRAPPER_PATH"`,
+		`chmod 0755 "$TEST_WRAPPER_PATH"`,
+		`sed "s|__MOLTBOX_CLI_PATH__|$SHARED_CLI_PATH|g" "$PROD_WRAPPER_SOURCE" > "$PROD_WRAPPER_PATH"`,
+		`chmod 0755 "$PROD_WRAPPER_PATH"`,
 		`sed "s|__MOLTBOX_CLI_PATH__|$SHARED_CLI_PATH|g" "$BOOTSTRAP_WRAPPER_SOURCE" > "$BOOTSTRAP_WRAPPER_PATH"`,
 		`chmod 0755 "$BOOTSTRAP_WRAPPER_PATH"`,
 		`CLI_OWNER="$(stat -c '%u:%g' "$(dirname "$CLI_PATH")")"`,
@@ -531,19 +539,126 @@ func currentOperator() string {
 }
 
 func (m *Manager) RestartService(ctx context.Context, route *cli.Route, service string) (cli.ServiceActionResult, error) {
-	deployResult, err := m.DeployService(ctx, route, service)
+	canonicalService := canonicalServiceName(service)
+	if canonicalService == "gateway" {
+		return cli.ServiceActionResult{}, fmt.Errorf("gateway service restart gateway is not supported; use 'moltbox gateway update'")
+	}
+
+	definition, err := m.LoadServiceDefinition(canonicalService)
 	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	snapshotRecord, err := m.snapshotServiceState(ctx, route.Action, canonicalService)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	outputDir, err := m.ensureRenderedServiceState(canonicalService, definition)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	result, err := m.runner.Run(ctx, outputDir, "docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "restart")
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+	if result.ExitCode != 0 {
+		return cli.ServiceActionResult{}, fmt.Errorf("docker compose restart failed: %s", strings.TrimSpace(result.Stdout))
+	}
+
+	containers, err := m.waitForContainers(ctx, definition.ContainerNames, 2*time.Minute)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	if err := m.recordServiceDeployment(route, canonicalService, containers, "success", mergeDetailMaps(snapshotRecord.DetailMap(), map[string]string{
+		"operation": "service_restart",
+	})); err != nil {
 		return cli.ServiceActionResult{}, err
 	}
 
 	return cli.ServiceActionResult{
 		OK:         true,
 		Route:      route,
-		Service:    service,
+		Service:    canonicalService,
 		Action:     route.Action,
-		Command:    deployResult.Command,
-		Containers: deployResult.Containers,
+		Command:    []string{"docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "restart"},
+		Containers: containers,
 	}, nil
+}
+
+func (m *Manager) RemoveService(ctx context.Context, route *cli.Route, service string) (cli.ServiceActionResult, error) {
+	canonicalService := canonicalServiceName(service)
+	if canonicalService == "gateway" {
+		return cli.ServiceActionResult{}, fmt.Errorf("gateway service remove gateway is not supported")
+	}
+
+	definition, err := m.LoadServiceDefinition(canonicalService)
+	outputDir := ""
+	if err != nil {
+		if !isLegacyRemovableService(canonicalService) {
+			return cli.ServiceActionResult{}, err
+		}
+		outputDir = m.config.ServiceStateDir(canonicalService)
+		composePath := filepath.Join(outputDir, "compose.yml")
+		if _, statErr := os.Stat(composePath); statErr != nil {
+			return cli.ServiceActionResult{}, fmt.Errorf("legacy service %s has no rendered compose state to remove: %w", canonicalService, statErr)
+		}
+		definition = ServiceDefinition{
+			ComposeProject: canonicalService,
+			ContainerNames: []string{canonicalService},
+		}
+	}
+
+	snapshotRecord, err := m.snapshotServiceState(ctx, route.Action, canonicalService)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	if outputDir == "" {
+		outputDir, err = m.ensureRenderedServiceState(canonicalService, definition)
+		if err != nil {
+			return cli.ServiceActionResult{}, err
+		}
+	}
+
+	result, err := m.runner.Run(ctx, outputDir, "docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "down", "--remove-orphans")
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+	if result.ExitCode != 0 {
+		return cli.ServiceActionResult{}, fmt.Errorf("docker compose down failed: %s", strings.TrimSpace(result.Stdout))
+	}
+
+	containers, err := m.inspectContainers(ctx, definition.ContainerNames)
+	if err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	if err := m.recordServiceDeployment(route, canonicalService, containers, "success", mergeDetailMaps(snapshotRecord.DetailMap(), map[string]string{
+		"operation": "service_remove",
+	})); err != nil {
+		return cli.ServiceActionResult{}, err
+	}
+
+	return cli.ServiceActionResult{
+		OK:         true,
+		Route:      route,
+		Service:    canonicalService,
+		Action:     route.Action,
+		Command:    []string{"docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "down", "--remove-orphans"},
+		Containers: containers,
+	}, nil
+}
+
+func isLegacyRemovableService(service string) bool {
+	switch canonicalServiceName(service) {
+	case "playwright":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) ServiceList(ctx context.Context, route *cli.Route) (cli.ServiceListResult, error) {
@@ -675,10 +790,35 @@ func (m *Manager) ServicePassthrough(ctx context.Context, route *cli.Route) (cli
 }
 
 func (m *Manager) RuntimeOpenClaw(ctx context.Context, route *cli.Route) (cli.CommandResult, error) {
+	var snapshotRecord *zfsSnapshotRecord
+	mutationKind, isMutation := runtimeOpenClawMutationKind(route.NativeArgs)
+	if isMutation {
+		record, err := m.snapshotServiceState(ctx, "openclaw-"+mutationKind, route.Runtime)
+		if err == nil {
+			snapshotRecord = record
+		}
+	}
+
 	commandArgs := append([]string{"exec", route.Runtime, "openclaw"}, route.NativeArgs...)
 	result, err := m.runner.Run(ctx, "", "docker", commandArgs...)
 	if err != nil {
 		return cli.CommandResult{}, err
+	}
+
+	if isMutation && result.ExitCode == 0 {
+		_ = m.stateStore.AppendDeployment(deploystate.DeploymentRecord{
+			DeploymentID:    newGatewayID("runtime"),
+			Timestamp:       time.Now().UTC().Format(time.RFC3339),
+			Actor:           deploymentActor(route),
+			Target:          route.Runtime,
+			ArtifactVersion: m.currentServiceArtifactVersion(route.Runtime, nil),
+			Result:          "success",
+			Operation:       "runtime_openclaw_" + mutationKind,
+			Runtime:         route.Runtime,
+			Details: mergeDetailMaps(detailMapFromSnapshot(snapshotRecord), map[string]string{
+				"native_args": strings.Join(route.NativeArgs, " "),
+			}),
+		})
 	}
 
 	return cli.CommandResult{
@@ -1056,6 +1196,100 @@ func (m *Manager) inspectContainers(ctx context.Context, names []string) ([]cli.
 		containers = append(containers, status)
 	}
 	return containers, nil
+}
+
+func (m *Manager) ensureRenderedServiceState(service string, definition ServiceDefinition) (string, error) {
+	outputDir := m.config.ServiceStateDir(service)
+	if _, err := os.Stat(filepath.Join(outputDir, "compose.yml")); err == nil {
+		return outputDir, nil
+	}
+	renderedDir, _, err := m.RenderServiceAssets(service, definition)
+	if err != nil {
+		return "", err
+	}
+	return renderedDir, nil
+}
+
+func detailMapFromSnapshot(record *zfsSnapshotRecord) map[string]string {
+	if record == nil {
+		return nil
+	}
+	return record.DetailMap()
+}
+
+func mergeDetailMaps(parts ...map[string]string) map[string]string {
+	merged := map[string]string{}
+	for _, part := range parts {
+		for key, value := range part {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			merged[key] = value
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
+func runtimeOpenClawMutationKind(args []string) (string, bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+	if runtimeOpenClawHelpLike(args) || runtimeOpenClawDryRun(args) {
+		return "", false
+	}
+	switch strings.TrimSpace(args[0]) {
+	case "backup":
+		if len(args) >= 2 && strings.TrimSpace(args[1]) == "restore" {
+			return "backup_restore", true
+		}
+	case "config":
+		if len(args) >= 2 {
+			switch strings.TrimSpace(args[1]) {
+			case "apply", "patch", "set", "unset", "restore":
+				return "config_" + strings.TrimSpace(args[1]), true
+			}
+		}
+	case "plugins":
+		if len(args) >= 2 {
+			switch strings.TrimSpace(args[1]) {
+			case "install", "remove", "uninstall", "enable", "disable", "update":
+				return "plugins_" + strings.TrimSpace(args[1]), true
+			}
+		}
+	case "skills":
+		if len(args) >= 2 {
+			switch strings.TrimSpace(args[1]) {
+			case "install", "remove", "enable", "disable":
+				return "skills_" + strings.TrimSpace(args[1]), true
+			}
+		}
+	case "reset":
+		return "reset", true
+	}
+	return "", false
+}
+
+func runtimeOpenClawHelpLike(args []string) bool {
+	for _, arg := range args {
+		switch strings.TrimSpace(arg) {
+		case "-h", "--help", "help":
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeOpenClawDryRun(args []string) bool {
+	for _, arg := range args {
+		switch strings.TrimSpace(arg) {
+		case "--dry-run", "--check":
+			return true
+		}
+	}
+	return false
 }
 
 func copyFile(source, destination string) error {
