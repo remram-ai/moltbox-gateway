@@ -1072,9 +1072,18 @@ func ensureRuntimeStateOwnership(root string) error {
 	}
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			if errorsIsNotExist(err) {
+				return nil
+			}
 			return err
 		}
-		return os.Chown(path, 1000, 1000)
+		if err := os.Chown(path, 1000, 1000); err != nil {
+			if errorsIsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		return nil
 	})
 }
 
