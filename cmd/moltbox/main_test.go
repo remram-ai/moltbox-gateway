@@ -648,6 +648,92 @@ func TestSSHWrapperModePreservesQuotedSecretValue(t *testing.T) {
 	}
 }
 
+func TestSSHWrapperModeTestOperatorAllowsVerifyBrowser(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", request.Method)
+		}
+		if request.URL.Path != "/runtime/verify" {
+			t.Fatalf("path = %s, want /runtime/verify", request.URL.Path)
+		}
+
+		var payload cli.RouteRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.Route == nil {
+			t.Fatal("payload.route = nil")
+		}
+		if payload.Route.Kind != cli.KindRuntimeVerify || payload.Route.Subject != "browser" {
+			t.Fatalf("payload.route = %#v, want verify browser route", payload.Route)
+		}
+
+		_ = json.NewEncoder(writer).Encode(cli.RuntimeVerifyResult{
+			OK:          true,
+			Route:       payload.Route,
+			Environment: "test",
+			Runtime:     "openclaw-test",
+			Check:       "browser",
+			Summary:     "test verify browser passed",
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("MOLTBOX_GATEWAY_URL", server.URL)
+
+	var stdout strings.Builder
+	code := run([]string{
+		"__ssh-wrapper=test-operator",
+		`moltbox test verify browser https://example.com`,
+	}, &stdout, ioDiscard{})
+	if code != cli.ExitOK {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)
+	}
+}
+
+func TestSSHWrapperModeProdOperatorAllowsVerifyRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", request.Method)
+		}
+		if request.URL.Path != "/runtime/verify" {
+			t.Fatalf("path = %s, want /runtime/verify", request.URL.Path)
+		}
+
+		var payload cli.RouteRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.Route == nil {
+			t.Fatal("payload.route = nil")
+		}
+		if payload.Route.Kind != cli.KindRuntimeVerify || payload.Route.Subject != "runtime" {
+			t.Fatalf("payload.route = %#v, want verify runtime route", payload.Route)
+		}
+
+		_ = json.NewEncoder(writer).Encode(cli.RuntimeVerifyResult{
+			OK:          true,
+			Route:       payload.Route,
+			Environment: "prod",
+			Runtime:     "openclaw-prod",
+			Check:       "runtime",
+			Summary:     "prod verify runtime passed",
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("MOLTBOX_GATEWAY_URL", server.URL)
+
+	var stdout strings.Builder
+	code := run([]string{
+		"__ssh-wrapper=prod-operator",
+		`moltbox prod verify runtime`,
+	}, &stdout, ioDiscard{})
+	if code != cli.ExitOK {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)
+	}
+}
+
 func TestSSHWrapperModeRejectsShellOperators(t *testing.T) {
 	t.Parallel()
 

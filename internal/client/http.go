@@ -53,6 +53,8 @@ func (c *HTTPClient) Execute(route *cli.Route, secretValue string) ([]byte, erro
 		return c.post("/update", cli.RouteRequest{Route: route, Service: "gateway"})
 	case route.Kind == cli.KindRuntimeNative:
 		return c.post("/runtime/openclaw", cli.RouteRequest{Route: route})
+	case route.Kind == cli.KindRuntimeVerify:
+		return c.post("/runtime/verify", cli.RouteRequest{Route: route})
 	case route.Kind == cli.KindServiceNative:
 		return c.post("/service/passthrough", cli.RouteRequest{Route: route})
 	default:

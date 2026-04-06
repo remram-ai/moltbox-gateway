@@ -37,7 +37,9 @@ moltbox
   gateway status|logs|update|mcp-stdio
   service list|status|deploy|restart|remove|logs <service>
   test openclaw <native args>
+  test verify runtime|browser|web
   prod openclaw <native args>
+  prod verify runtime
   ollama <native args>
   secret set|list|delete <scope>
 ```
@@ -69,6 +71,7 @@ Retired public namespaces fail explicitly:
 
 - service deploy and restart take ZFS snapshots
 - mutating native `moltbox test|prod openclaw ...` commands take ZFS snapshots
+- operator-grade runtime checks are exposed through `moltbox test|prod verify ...`
 - ZFS rollback has been manually proven on the live host
 - native OpenClaw backup create and verify are proven
 - native OpenClaw restore is not yet a proven primary recovery path

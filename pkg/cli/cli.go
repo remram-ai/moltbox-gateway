@@ -32,6 +32,7 @@ const (
 	KindRuntimePlugin  = "runtime_plugin"
 	KindRuntimeSkill   = "runtime_skill"
 	KindRuntimeNative  = "runtime_openclaw"
+	KindRuntimeVerify  = "runtime_verify"
 	KindServiceNative  = "service_passthrough"
 )
 
@@ -242,6 +243,29 @@ type CommandResult struct {
 	Stdout        string   `json:"stdout,omitempty"`
 	Stderr        string   `json:"stderr,omitempty"`
 	ExitCode      int      `json:"exit_code"`
+}
+
+type VerifyStepResult struct {
+	Name          string            `json:"name"`
+	OK            bool              `json:"ok"`
+	Summary       string            `json:"summary,omitempty"`
+	Command       []string          `json:"command,omitempty"`
+	ExitCode      int               `json:"exit_code,omitempty"`
+	StdoutSnippet string            `json:"stdout_snippet,omitempty"`
+	StderrSnippet string            `json:"stderr_snippet,omitempty"`
+	Details       map[string]string `json:"details,omitempty"`
+}
+
+type RuntimeVerifyResult struct {
+	OK          bool               `json:"ok"`
+	Route       *Route             `json:"route"`
+	Environment string             `json:"environment"`
+	Runtime     string             `json:"runtime"`
+	Check       string             `json:"check"`
+	TargetURL   string             `json:"target_url,omitempty"`
+	Summary     string             `json:"summary,omitempty"`
+	Caveats     []string           `json:"caveats,omitempty"`
+	Steps       []VerifyStepResult `json:"steps"`
 }
 
 type SecretSetResult struct {
@@ -559,7 +583,7 @@ func parseRuntimeOpenClaw(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("missing command for environment '%s'", args[0]),
-				fmt.Sprintf("use: %s openclaw <command>", args[0]),
+				runtimeUsage(args[0]),
 			),
 			Code: ExitParseError,
 		}
@@ -572,31 +596,59 @@ func parseRuntimeOpenClaw(args []string) ParseResult {
 		Runtime:     runtimeMappings[args[0]],
 	}
 
-	if args[1] != "openclaw" {
+	switch args[1] {
+	case "openclaw":
+		if len(args) < 3 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("missing native OpenClaw command for '%s'", args[0]),
+					fmt.Sprintf("use: %s openclaw <command>", args[0]),
+				),
+				Code: ExitParseError,
+			}
+		}
+
+		route.Kind = KindRuntimeNative
+		route.Action = "openclaw"
+		route.NativeArgs = normalizeRuntimeNativeArgs(args[2:])
+		return ParseResult{Route: route}
+	case "verify":
+		if len(args) < 3 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					fmt.Sprintf("missing verify check for '%s'", args[0]),
+					verifyUsage(args[0]),
+				),
+				Code: ExitParseError,
+			}
+		}
+		check := strings.TrimSpace(args[2])
+		if errEnvelope := validateRuntimeVerifyTarget(args[0], check); errEnvelope != nil {
+			return ParseResult{
+				Envelope: errEnvelope,
+				Code:     ExitParseError,
+			}
+		}
+
+		route.Kind = KindRuntimeVerify
+		route.Action = "verify"
+		route.Subject = check
+		if len(args) > 3 {
+			route.NativeArgs = append([]string(nil), args[3:]...)
+		}
+		return ParseResult{Route: route}
+	default:
 		return ParseResult{
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown environment command '%s'", args[1]),
-				fmt.Sprintf("use: %s openclaw <command>", args[0]),
+				runtimeUsage(args[0]),
 			),
 			Code: ExitParseError,
 		}
 	}
-	if len(args) < 3 {
-		return ParseResult{
-			Envelope: Error(nil,
-				"parse_error",
-				fmt.Sprintf("missing native OpenClaw command for '%s'", args[0]),
-				fmt.Sprintf("use: %s openclaw <command>", args[0]),
-			),
-			Code: ExitParseError,
-		}
-	}
-
-	route.Kind = KindRuntimeNative
-	route.Action = "openclaw"
-	route.NativeArgs = normalizeRuntimeNativeArgs(args[2:])
-	return ParseResult{Route: route}
 }
 
 func parseSecret(args []string) ParseResult {
@@ -886,6 +938,51 @@ func validatePublicService(action, service string) *Envelope {
 	return nil
 }
 
+func runtimeUsage(environment string) string {
+	return fmt.Sprintf("use: %s openclaw <command> | %s verify <check>", environment, environment)
+}
+
+func verifyUsage(environment string) string {
+	switch environment {
+	case "test":
+		return "use: test verify runtime | test verify browser [url] | test verify web"
+	case "prod":
+		return "use: prod verify runtime"
+	default:
+		return fmt.Sprintf("use: %s verify <check>", environment)
+	}
+}
+
+func validateRuntimeVerifyTarget(environment, check string) *Envelope {
+	switch environment {
+	case "test":
+		switch check {
+		case "runtime", "browser", "web":
+			return nil
+		}
+		return Error(nil,
+			"parse_error",
+			fmt.Sprintf("unknown test verify check '%s'", check),
+			verifyUsage(environment),
+		)
+	case "prod":
+		if check == "runtime" {
+			return nil
+		}
+		return Error(nil,
+			"parse_error",
+			fmt.Sprintf("unsupported prod verify check '%s'", check),
+			verifyUsage(environment),
+		)
+	default:
+		return Error(nil,
+			"parse_error",
+			fmt.Sprintf("unknown environment '%s'", environment),
+			verifyUsage(environment),
+		)
+	}
+}
+
 var helpTextByTopic = map[string]string{
 	"global": `
 moltbox <resource> <command>
@@ -910,6 +1007,7 @@ Resources:
 
   test|prod
     openclaw <command>
+    verify <check>
 
   ollama
     <native command>
@@ -958,14 +1056,20 @@ Services:
   prod
 `,
 	"test": `
-moltbox test openclaw <command>
+moltbox test <command>
 
-The test runtime only exposes native OpenClaw passthrough on the public CLI.
+Commands:
+  openclaw <command>
+  verify runtime
+  verify browser [url]
+  verify web
 `,
 	"prod": `
-moltbox prod openclaw <command>
+moltbox prod <command>
 
-The prod runtime only exposes native OpenClaw passthrough on the public CLI.
+Commands:
+  openclaw <command>
+  verify runtime
 `,
 	"ollama": `
 moltbox ollama <native command>

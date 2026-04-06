@@ -23,7 +23,9 @@ moltbox
   gateway status|logs|update|mcp-stdio
   service list|status|deploy|restart|remove|logs <service>
   test openclaw <native args>
+  test verify runtime|browser|web
   prod openclaw <native args>
+  prod verify runtime
   ollama <native args>
   secret set|list|delete <scope>
 ```
@@ -62,11 +64,22 @@ Use native OpenClaw CLI on `test`:
 - `moltbox test openclaw browser status --json`
 - `moltbox test openclaw browser tabs --json`
 
+Run operator-grade verification on `test`:
+
+- `moltbox test verify runtime`
+- `moltbox test verify browser`
+- `moltbox test verify browser https://example.com`
+- `moltbox test verify web`
+
 Use native OpenClaw CLI on `prod`:
 
 - `moltbox prod openclaw health --json`
 - `moltbox prod openclaw models status --json`
 - `moltbox prod openclaw backup create --verify`
+
+Run operator-grade verification on `prod`:
+
+- `moltbox prod verify runtime`
 
 Use Ollama:
 
@@ -111,12 +124,14 @@ AI test operator:
 - forced-command SSH
 - CLI-driven mutation on `test`
 - limited service-plane mutation for `test`, `ollama`, and `searxng`
+- routine verification through `moltbox test verify ...`
 
 AI prod operator:
 
 - forced-command SSH
 - non-mutating diagnostics on `prod`
 - no prod mutation rights
+- routine verification through `moltbox prod verify runtime`
 
 Break-glass admin:
 
@@ -137,6 +152,7 @@ Important caveat:
 - the native browser surface is enabled and healthy
 - ordinary local Mistral chat is still not fully reliable at choosing `web_fetch` or `browser` through chat on every turn
 - if a tool-heavy web task matters, validate it in `test` before treating it as a gold-path local-chat behavior
+- `moltbox test verify web` proves backend/config availability, not that the local chat model will choose the tools reliably
 
 ## Retired Public Surfaces
 

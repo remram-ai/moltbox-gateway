@@ -10,7 +10,9 @@ moltbox
   gateway status|logs|update|mcp-stdio
   service list|status|deploy|restart|remove|logs <service>
   test openclaw <native args>
+  test verify runtime|browser|web
   prod openclaw <native args>
+  prod verify runtime
   ollama <native args>
   secret set|list|delete <scope>
 ```
@@ -43,6 +45,15 @@ Normal runtime mutation happens through native OpenClaw surfaces:
 - `moltbox prod openclaw ...`
 
 The gateway wraps those calls for policy and snapshot guardrails, but it does not replace them with its old replay model.
+
+The gateway also owns a small verification surface for restricted operators:
+
+- `moltbox test verify runtime`
+- `moltbox test verify browser`
+- `moltbox test verify web`
+- `moltbox prod verify runtime`
+
+Those checks exist so routine validation can stay inside the restricted SSH roles without shell chaining or break-glass access.
 
 ## Snapshot Guardrails
 

@@ -51,7 +51,9 @@ moltbox
   gateway status|logs|update|mcp-stdio
   service list|status|deploy|restart|remove|logs <service>
   test openclaw <native args>
+  test verify runtime|browser|web
   prod openclaw <native args>
+  prod verify runtime
   ollama <native args>
   secret set|list|delete <scope>
 ```
@@ -69,6 +71,7 @@ Core operating model:
 
 - `test` and `prod` are managed-pet OpenClaw runtimes
 - normal runtime mutation happens through native `openclaw` CLI surfaces
+- routine runtime verification happens through `moltbox test|prod verify ...`
 - replay and checkpoint are not part of the normal `test` / `prod` lifecycle
 - service deploy, service restart, and mutating native runtime commands are snapshot-guarded
 - ZFS snapshots are the first restore-point mechanism

@@ -26,6 +26,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/logs", s.handleGatewayLogs)
 	mux.HandleFunc("/update", s.handleGatewayUpdate)
 	mux.HandleFunc("/runtime/openclaw", s.handleRuntimeOpenClaw)
+	mux.HandleFunc("/runtime/verify", s.handleRuntimeVerify)
 	mux.HandleFunc("/token/create", s.handleTokenCreate)
 	mux.HandleFunc("/token/list", s.handleTokenList)
 	mux.HandleFunc("/token/delete", s.handleTokenDelete)
@@ -547,6 +548,38 @@ func (s *Server) handleRuntimeReload(writer http.ResponseWriter, request *http.R
 		))
 		return
 	}
+	s.writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleRuntimeVerify(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /runtime/verify"))
+		return
+	}
+
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed runtime verify route")
+	if !ok {
+		return
+	}
+	if payload.Route == nil || payload.Route.Kind != cli.KindRuntimeVerify || payload.Route.Action != "verify" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing runtime verify route", "use: test verify <check> | prod verify runtime"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
+	defer cancel()
+
+	result, err := s.orchestrator.RuntimeVerify(ctx, payload.Route)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"runtime_verify_failed",
+			fmt.Sprintf("failed to verify runtime '%s'", payload.Route.Runtime),
+			err.Error(),
+		))
+		return
+	}
+
 	s.writeJSON(writer, http.StatusOK, result)
 }
 

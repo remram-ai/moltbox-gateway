@@ -10,7 +10,9 @@ moltbox
   gateway status|logs|update|mcp-stdio
   service list|status|deploy|restart|remove|logs <service>
   test openclaw <native args>
+  test verify runtime|browser|web
   prod openclaw <native args>
+  prod verify runtime
   ollama <native args>
   secret set|list|delete <scope>
 ```
@@ -31,6 +33,7 @@ Gateway role:
 - gateway update owner
 - secret owner
 - SSH role policy owner
+- owner of routine operator verification surfaces
 
 Not the gateway role:
 

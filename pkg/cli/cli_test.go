@@ -147,6 +147,75 @@ func TestParseRuntimeOpenClawAcrossEnvironments(t *testing.T) {
 	}
 }
 
+func TestParseRuntimeVerifyAcrossEnvironments(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		args        []string
+		wantEnv     string
+		wantRuntime string
+		wantCheck   string
+		wantArgs    []string
+	}{
+		{
+			name:        "test verify runtime",
+			args:        []string{"test", "verify", "runtime"},
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+			wantCheck:   "runtime",
+		},
+		{
+			name:        "test verify browser url",
+			args:        []string{"test", "verify", "browser", "https://example.com"},
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+			wantCheck:   "browser",
+			wantArgs:    []string{"https://example.com"},
+		},
+		{
+			name:        "prod verify runtime",
+			args:        []string{"prod", "verify", "runtime"},
+			wantEnv:     "prod",
+			wantRuntime: "openclaw-prod",
+			wantCheck:   "runtime",
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := Parse(testCase.args)
+			if result.Route == nil {
+				t.Fatal("Parse() route = nil")
+			}
+			if result.Route.Kind != KindRuntimeVerify || result.Route.Action != "verify" {
+				t.Fatalf("Parse() route = %#v, want runtime verify route", result.Route)
+			}
+			if result.Route.Environment != testCase.wantEnv || result.Route.Runtime != testCase.wantRuntime || result.Route.Subject != testCase.wantCheck {
+				t.Fatalf("Parse() route = %#v", result.Route)
+			}
+			if !equalArgs(result.Route.NativeArgs, testCase.wantArgs) {
+				t.Fatalf("Parse() native_args = %#v, want %#v", result.Route.NativeArgs, testCase.wantArgs)
+			}
+		})
+	}
+}
+
+func TestParseRuntimeVerifyRejectsUnsupportedProdCheck(t *testing.T) {
+	t.Parallel()
+
+	result := Parse([]string{"prod", "verify", "browser"})
+	if result.Code != ExitParseError {
+		t.Fatalf("Parse() code = %d, want %d", result.Code, ExitParseError)
+	}
+	if result.Envelope == nil || result.Envelope.ErrorType != "parse_error" {
+		t.Fatalf("Parse() envelope = %#v, want parse_error", result.Envelope)
+	}
+}
+
 func TestParseSecretsSetJoinsInlineValue(t *testing.T) {
 	t.Parallel()
 
@@ -284,12 +353,32 @@ func TestWriteHelpGlobalDocumentsLightweightSurface(t *testing.T) {
 		"test|prod",
 		"ollama",
 		"secret",
+		"verify <check>",
 		"gateway docker",
 		"gateway service",
 	} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("global help missing %q in %q", needle, text)
 		}
+	}
+}
+
+func TestWriteHelpRuntimeTopicsDocumentVerify(t *testing.T) {
+	t.Parallel()
+
+	for _, topic := range []string{"test", "prod"} {
+		topic := topic
+		t.Run(topic, func(t *testing.T) {
+			t.Parallel()
+
+			var out bytes.Buffer
+			if err := WriteHelp(&out, topic); err != nil {
+				t.Fatalf("WriteHelp(%s): %v", topic, err)
+			}
+			if !strings.Contains(out.String(), "verify") {
+				t.Fatalf("%s help missing verify surface in %q", topic, out.String())
+			}
+		})
 	}
 }
 

@@ -83,10 +83,18 @@ func applyTestOperatorPolicy(args []string) ([]string, string, error) {
 		}
 		return nil, "gateway access is limited to status, logs, and mcp-stdio", nil
 	case "test":
-		if len(args) >= 3 && args[1] == "openclaw" {
-			return args, "", nil
+		if len(args) >= 3 {
+			if args[1] == "openclaw" {
+				return args, "", nil
+			}
+			if args[1] == "verify" {
+				switch args[2] {
+				case "runtime", "browser", "web":
+					return args, "", nil
+				}
+			}
 		}
-		return nil, "test operator access is limited to native test OpenClaw commands", nil
+		return nil, "test operator access is limited to native test OpenClaw commands and verify runtime|browser|web", nil
 	case "ollama":
 		if len(args) >= 2 {
 			switch args[1] {
@@ -123,13 +131,18 @@ func applyProdOperatorPolicy(args []string) ([]string, string, error) {
 		}
 		return nil, "prod operator service access is limited to list, status, and logs", nil
 	case "prod":
-		if len(args) >= 3 && args[1] == "openclaw" {
-			if isRuntimeMutationArgs(args[2:]) {
-				return nil, "prod operator cannot run mutating OpenClaw lifecycle commands", nil
+		if len(args) >= 3 {
+			if args[1] == "openclaw" {
+				if isRuntimeMutationArgs(args[2:]) {
+					return nil, "prod operator cannot run mutating OpenClaw lifecycle commands", nil
+				}
+				return args, "", nil
 			}
-			return args, "", nil
+			if args[1] == "verify" && args[2] == "runtime" {
+				return args, "", nil
+			}
 		}
-		return nil, "prod operator access is limited to non-mutating native prod OpenClaw commands", nil
+		return nil, "prod operator access is limited to non-mutating native prod OpenClaw commands and verify runtime", nil
 	case "ollama":
 		if len(args) >= 2 {
 			switch args[1] {

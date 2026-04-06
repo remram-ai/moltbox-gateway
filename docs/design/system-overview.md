@@ -97,7 +97,9 @@ Native runtime path:
 
 ```text
 moltbox test openclaw <native args>
+moltbox test verify runtime|browser|web
 moltbox prod openclaw <native args>
+moltbox prod verify runtime
 ```
 
 ## Authority Boundaries
