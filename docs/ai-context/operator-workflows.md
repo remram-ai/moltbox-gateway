@@ -7,7 +7,9 @@ Official command families:
 - `moltbox gateway ...`
 - `moltbox service ...`
 - `moltbox test openclaw ...`
+- `moltbox test verify ...`
 - `moltbox prod openclaw ...`
+- `moltbox prod verify ...`
 - `moltbox ollama ...`
 - `moltbox secret ...`
 
@@ -16,6 +18,11 @@ Normal workflows:
 - inspect appliance:
   - `moltbox gateway status`
   - `moltbox service list`
+- verify runtimes:
+  - `moltbox test verify runtime`
+  - `moltbox test verify browser`
+  - `moltbox test verify web`
+  - `moltbox prod verify runtime`
 - mutate service plane:
   - `moltbox service deploy <service>`
   - `moltbox service restart <service>`

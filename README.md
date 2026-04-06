@@ -4,6 +4,17 @@
 
 This repo is the local source of truth for the current Gateway/OpenClaw operating model. Older `remram` docs are useful history, but they do not override this repo for Gateway implementation and operations.
 
+## Documentation Tree
+
+Follow the repo in this order:
+
+- `docs/README.md`
+- `docs/guides/README.md`
+- `docs/design/README.md`
+- `docs/ai-context/README.md`
+
+Use the dated material under `docs/decisions/`, `docs/reviews/`, `docs/plans/`, and `docs/runbooks/` only after the current guides and design docs.
+
 ## Humans Start Here
 
 Read these in order:
@@ -34,6 +45,7 @@ Import these first:
 3. `docs/ai-context/current-state.md`
 4. `docs/ai-context/future-state.md`
 5. `docs/ai-context/operator-workflows.md`
+6. `docs/ai-context/cortex-implementation-thread-prompt.md` if you are starting a Cortex implementation thread
 
 Then add the task-specific context:
 
@@ -66,6 +78,11 @@ Current managed services:
 - `searxng`
 - `test`
 - `prod`
+
+Runtime service mapping:
+
+- public `test` -> `openclaw-test`
+- public `prod` -> `openclaw-prod`
 
 Core operating model:
 
