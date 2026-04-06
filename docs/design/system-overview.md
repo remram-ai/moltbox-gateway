@@ -56,8 +56,8 @@ System-owned operations:
 | Repo | Role |
 | --- | --- |
 | `moltbox-gateway` | CLI, gateway API, orchestration, SSH role policy, current docs |
-| `moltbox-services` | service definitions and service templates |
-| `moltbox-runtime` | desired OpenClaw baseline for `test` and `prod` |
+| `moltbox-services` | baseline service definitions, baseline config examples, and service docs |
+| `moltbox-runtime` | final deployable runtime artifacts consumed by the current release path |
 | `remram-skills` | future tracked extension source when needed |
 | `remram-cortex` | Cortex overlays and future integration inputs |
 
@@ -66,8 +66,9 @@ System-owned operations:
 | Concern | Primary source |
 | --- | --- |
 | public CLI contract | `cli-and-gateway.md` |
-| service inventory and behavior | `runtime-and-services.md` plus `moltbox-services` |
-| runtime baseline | `moltbox-runtime` plus `runtime-and-services.md` |
+| baseline service definitions and baseline config examples | `moltbox-services` |
+| final deployable runtime artifacts | `moltbox-runtime` |
+| operator-facing appliance behavior | `runtime-and-services.md` |
 | live appliance state | host ZFS-backed state and native OpenClaw runtime state |
 | durable recovery | ZFS snapshots plus verified backups |
 

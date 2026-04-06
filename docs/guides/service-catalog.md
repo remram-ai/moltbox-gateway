@@ -1,6 +1,13 @@
 # Service Catalog
 
-This is the current service catalog for the Moltbox appliance.
+This is the operator-facing service catalog for the Moltbox appliance.
+
+It is not the long-term authority for service definitions or baseline service config.
+
+Use:
+
+- `moltbox-services` for service definitions, baseline configs, and service-local docs
+- `moltbox-runtime` for the final deployable runtime artifacts used by the current release path
 
 ## Service Inventory
 
@@ -60,7 +67,7 @@ Examples:
 The gateway owns:
 
 - service deploy, restart, remove, logs, and status
-- rendered config and secret injection
+- rendering and secret injection during deployment
 - snapshot hooks and deployment history
 
 OpenClaw owns:
@@ -76,3 +83,5 @@ OpenClaw owns:
 - `../design/runtime-and-services.md`
 - `../design/web-tooling.md`
 - `operator-guide.md`
+- `../../../moltbox-services/README.md`
+- `../../../moltbox-runtime/README.md`

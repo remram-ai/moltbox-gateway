@@ -952,7 +952,7 @@ func (m *Manager) copyServiceAssets(serviceRoot, outputDir string) error {
 		if err != nil {
 			return err
 		}
-		if relative == "service.yaml" || relative == "compose.yml.template" {
+		if !shouldCopyServiceAsset(relative) {
 			return nil
 		}
 
@@ -967,6 +967,22 @@ func (m *Manager) copyServiceAssets(serviceRoot, outputDir string) error {
 		}
 		return os.WriteFile(destination, data, 0o644)
 	})
+}
+
+func shouldCopyServiceAsset(relative string) bool {
+	normalized := filepath.ToSlash(relative)
+	switch normalized {
+	case "service.yaml", "compose.yml.template":
+		return false
+	}
+	if strings.HasPrefix(normalized, "baseline/") || strings.HasPrefix(normalized, "docs/") {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(normalized)) {
+	case ".md", ".markdown":
+		return false
+	}
+	return true
 }
 
 func (m *Manager) renderConfigAssets(service, outputDir string) error {

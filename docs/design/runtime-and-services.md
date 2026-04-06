@@ -6,19 +6,20 @@ This document defines the current service inventory and the managed-pet runtime 
 
 | Service | Source | Role |
 | --- | --- | --- |
-| `gateway` | `moltbox-services` | control plane |
-| `caddy` | `moltbox-services` | ingress and TLS |
-| `ollama` | `moltbox-services` | local model backend |
-| `searxng` | `moltbox-services` | local search backend |
-| `openclaw-test` | `moltbox-services` + `moltbox-runtime` | proving runtime |
-| `openclaw-prod` | `moltbox-services` + `moltbox-runtime` | protected runtime |
+| `gateway` | baseline in `moltbox-services`, deployed artifact via current release path | control plane |
+| `caddy` | baseline in `moltbox-services`, deployed artifact via current release path | ingress and TLS |
+| `ollama` | baseline in `moltbox-services`, deployed artifact via current release path | local model backend |
+| `searxng` | baseline in `moltbox-services`, deployed artifact via current release path | local search backend |
+| `openclaw-test` | baseline in `moltbox-services`, final runtime artifact in `moltbox-runtime` | proving runtime |
+| `openclaw-prod` | baseline in `moltbox-services`, final runtime artifact in `moltbox-runtime` | protected runtime |
 
 ## Runtime Baseline Rules
 
-- `moltbox-runtime` owns the approved baseline
+- `moltbox-services` owns the baseline source inputs
+- `moltbox-runtime` holds the final deployable runtime layer used by the current release path
 - `test` proves baseline changes before `prod`
 - `prod` is not rebuilt from replay history
-- service deploy syncs the runtime baseline files into persisted runtime state
+- service deploy syncs the final runtime artifacts into persisted runtime state
 
 ## Replay And Checkpoint
 

@@ -13,7 +13,8 @@ Service inventory:
 
 Runtime rules:
 
-- `moltbox-runtime` owns the approved baseline
+- `moltbox-services` owns the baseline service inputs and baseline service docs
+- `moltbox-runtime` holds the final deployable runtime artifacts used by the current release path
 - `test` is the proving lane
 - `prod` changes only after `test` proves the baseline
 - replay is not the normal runtime model

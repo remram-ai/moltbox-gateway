@@ -26,3 +26,9 @@ Runtime baseline:
 - Together fallback remains configured
 - baseline web capability is `web_search`, `web_fetch`, and native `browser`
 - the old Playwright/browser detour is gone from the baseline
+
+Repository split:
+
+- `moltbox-services` owns baseline service inputs and service docs
+- `moltbox-runtime` holds the final deployable runtime layer used by the current release path
+- `moltbox-gateway` owns CLI, procedures, verification, and recovery workflow

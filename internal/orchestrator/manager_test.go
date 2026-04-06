@@ -281,6 +281,56 @@ func TestRenderServiceAssetsForCaddyGeneratesTLSAssets(t *testing.T) {
 	}
 }
 
+func TestRenderServiceAssetsSkipsDocsAndBaselines(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	stateRoot := filepath.Join(root, "state")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "searxng", "service.yaml"), "compose_project: searxng\ncontainer_names:\n  - searxng\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "searxng", "compose.yml.template"), "services:\n  {{ service_name }}:\n    container_name: \"{{ container_name }}\"\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "searxng", "config", "searxng", "settings.yml"), "use_default_settings: true\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "searxng", "README.md"), "# searxng\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "searxng", "docs", "notes.md"), "ignored\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "searxng", "baseline", "example.yml"), "ignored: true\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, nil)
+
+	definition, err := manager.LoadServiceDefinition("searxng")
+	if err != nil {
+		t.Fatalf("LoadServiceDefinition() error = %v", err)
+	}
+
+	outputDir, _, err := manager.RenderServiceAssets("searxng", definition)
+	if err != nil {
+		t.Fatalf("RenderServiceAssets() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(outputDir, "config", "searxng", "settings.yml")); err != nil {
+		t.Fatalf("expected service config to be copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "README.md")); !os.IsNotExist(err) {
+		t.Fatalf("README.md err = %v, want skipped", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "docs", "notes.md")); !os.IsNotExist(err) {
+		t.Fatalf("docs/notes.md err = %v, want skipped", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "baseline", "example.yml")); !os.IsNotExist(err) {
+		t.Fatalf("baseline/example.yml err = %v, want skipped", err)
+	}
+}
+
 func TestRenderServiceAssetsForCaddyUsesExactCanonicalSANSet(t *testing.T) {
 	t.Parallel()
 

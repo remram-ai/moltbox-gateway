@@ -4,6 +4,12 @@
 
 This repo is the local source of truth for the current Gateway/OpenClaw operating model. Older `remram` docs are useful history, but they do not override this repo for Gateway implementation and operations.
 
+Repository boundary:
+
+- `moltbox-gateway` owns CLI, procedures, verification, and recovery workflows
+- `moltbox-services` owns baseline service definitions and baseline config examples
+- `moltbox-runtime` holds the final deployable runtime artifacts consumed by the current release path
+
 ## Documentation Tree
 
 Follow the repo in this order:
@@ -78,6 +84,11 @@ Current managed services:
 - `searxng`
 - `test`
 - `prod`
+
+Service authority:
+
+- baseline service inputs and service docs live in `moltbox-services`
+- the current deploy path still consumes final runtime artifacts from `moltbox-runtime`
 
 Runtime service mapping:
 
