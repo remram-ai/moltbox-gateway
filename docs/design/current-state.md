@@ -71,7 +71,7 @@ Retired public namespaces fail explicitly:
 
 - service deploy and restart take ZFS snapshots
 - mutating native `moltbox test|prod openclaw ...` commands take ZFS snapshots
-- operator-grade runtime checks are exposed through `moltbox test|prod verify ...`
+- operator-grade runtime checks are exposed through `moltbox test verify ...` and `moltbox prod verify runtime`
 - ZFS rollback has been manually proven on the live host
 - native OpenClaw backup create and verify are proven
 - native OpenClaw restore is not yet a proven primary recovery path

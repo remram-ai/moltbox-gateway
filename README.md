@@ -99,7 +99,7 @@ Core operating model:
 
 - `test` and `prod` are managed-pet OpenClaw runtimes
 - normal runtime mutation happens through native `openclaw` CLI surfaces
-- routine runtime verification happens through `moltbox test|prod verify ...`
+- routine runtime verification happens through `moltbox test verify ...` and `moltbox prod verify runtime`
 - replay and checkpoint are not part of the normal `test` / `prod` lifecycle
 - service deploy, service restart, and mutating native runtime commands are snapshot-guarded
 - ZFS snapshots are the first restore-point mechanism

@@ -9,7 +9,7 @@ Official command families:
 - `moltbox test openclaw ...`
 - `moltbox test verify ...`
 - `moltbox prod openclaw ...`
-- `moltbox prod verify ...`
+- `moltbox prod verify runtime`
 - `moltbox ollama ...`
 - `moltbox secret ...`
 

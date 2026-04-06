@@ -10,7 +10,7 @@ High-level sequence:
 4. implement the lighter CLI and gateway contract
 5. remove `openclaw-dev` and OpenSearch from the service and runtime repos
 6. fix ownership, SSH identities, backup, and patching
-7. deploy the final five-service appliance
+7. deploy the final six-service appliance
 8. run the full validation suite
 
 Execution package:

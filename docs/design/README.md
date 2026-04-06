@@ -35,7 +35,7 @@ The design package assumes all of these:
 - snapshots are first-class recovery primitives
 - normal runtime mutation uses native OpenClaw surfaces
 - the gateway is a thin appliance orchestrator, not the authority for OpenClaw internals
-- baseline web capability is `web_search` plus built-in `web_fetch`
+- baseline web capability is `web_search`, built-in `web_fetch`, and native OpenClaw `browser`
 - the Playwright detour is removed from the current gold baseline
 
 ## Historical Material

@@ -83,5 +83,5 @@ OpenClaw owns:
 - `../design/runtime-and-services.md`
 - `../design/web-tooling.md`
 - `operator-guide.md`
-- `../../../moltbox-services/README.md`
-- `../../../moltbox-runtime/README.md`
+- `https://github.com/remram-ai/moltbox-services`
+- `https://github.com/remram-ai/moltbox-runtime`

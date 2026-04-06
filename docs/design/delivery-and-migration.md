@@ -43,7 +43,7 @@ Must deliver:
 
 Must deliver:
 
-- final five-service topology
+- final six-service topology with `searxng`
 - removed `openclaw-dev`
 - removed OpenSearch
 - updated Caddy assumptions
@@ -80,7 +80,7 @@ It is done only when:
 - the host satisfies the ZFS precondition
 - the final service set is healthy
 - the CLI matches the new contract
-- `test` and `prod` chat successfully
+- `test` and `prod` runtime validation succeeds through the supported surfaces
 - local Mistral usage is visible
 - Together escalation is visible
 - ownership and SSH policy are correct
