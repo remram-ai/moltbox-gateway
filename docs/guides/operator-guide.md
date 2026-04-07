@@ -84,7 +84,7 @@ Run operator-grade verification on `prod`:
 Use Ollama:
 
 - `moltbox ollama list`
-- `moltbox ollama show mistral:7b-instruct-32k`
+- `moltbox ollama show gemma4:e4b-it-q4_K_M`
 - `moltbox ollama ps`
 
 Manage secrets:
@@ -150,7 +150,8 @@ The old Playwright-based browser detour is removed from the baseline.
 Important caveat:
 
 - the native browser surface is enabled and healthy
-- ordinary local Mistral chat is still not fully reliable at choosing `web_fetch` or `browser` through chat on every turn
+- ordinary local Gemma chat is faster and more trustworthy for `web_search` and `web_fetch` than the previous Mistral baseline, but chat-level tool choice still needs human judgment on noisy pages
+- browser remains available, but it is no longer part of the default chat tool lane
 - if a tool-heavy web task matters, validate it in `test` before treating it as a gold-path local-chat behavior
 - `moltbox test verify web` proves backend/config availability, not that the local chat model will choose the tools reliably
 

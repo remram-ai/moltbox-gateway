@@ -15,9 +15,20 @@ import (
 const (
 	verifyBrowserDefaultURL = "https://example.com"
 	verifySearchURL         = "http://searxng:8080/search?q=searxng&format=json"
+	verifyLocalBaselineID   = "gemma4:e4b-it-q4_K_M"
+	verifyLocalBaseline     = "ollama/gemma4:e4b-it-q4_K_M"
+	verifyLocalContext      = 65536
 )
 
 type runtimeWebConfig struct {
+	Agents struct {
+		Defaults struct {
+			ContextTokens int `json:"contextTokens"`
+			Model         struct {
+				Primary string `json:"primary"`
+			} `json:"model"`
+		} `json:"defaults"`
+	} `json:"agents"`
 	Browser struct {
 		Headless bool `json:"headless"`
 	} `json:"browser"`
@@ -122,9 +133,11 @@ func (m *Manager) verifyRuntimeStatus(ctx context.Context, route *cli.Route, res
 	appendVerifyStep(result, commandVerifyStep(
 		"model-status",
 		models,
-		models.OK && strings.Contains(models.Stdout, "mistral:7b-instruct-32k"),
-		"model inventory includes the local Mistral baseline",
+		models.OK && strings.Contains(models.Stdout, verifyLocalBaselineID),
+		"model inventory includes the local Gemma 4 E4B baseline",
 	))
+
+	appendVerifyStep(result, m.verifyRuntimeBaselineConfig(ctx, route.Runtime))
 
 	browser := runVerifyOpenClawCommand(ctx, m, route.Runtime, "browser", "status")
 	appendVerifyStep(result, commandVerifyStep(
@@ -261,20 +274,73 @@ func (m *Manager) verifySearXNGHTTP(ctx context.Context) cli.VerifyStepResult {
 	}
 }
 
+func (m *Manager) verifyRuntimeBaselineConfig(ctx context.Context, runtime string) cli.VerifyStepResult {
+	cfg, step, ok := m.loadRuntimeConfig(ctx, runtime)
+	if !ok {
+		step.Name = "runtime-baseline-config"
+		return step
+	}
+
+	modelPrimary := strings.TrimSpace(cfg.Agents.Defaults.Model.Primary)
+	contextTokens := cfg.Agents.Defaults.ContextTokens
+	step.Name = "runtime-baseline-config"
+	step.OK = strings.EqualFold(modelPrimary, verifyLocalBaseline) && contextTokens == verifyLocalContext
+	step.Summary = "runtime config uses the Gemma 4 E4B 64K local baseline"
+	step.Details = map[string]string{
+		"primary_model":    modelPrimary,
+		"context_tokens":   fmt.Sprintf("%d", contextTokens),
+		"expected_model":   verifyLocalBaseline,
+		"expected_context": fmt.Sprintf("%d", verifyLocalContext),
+	}
+	return step
+}
+
 func (m *Manager) verifyWebRuntimeConfig(ctx context.Context, runtime string) cli.VerifyStepResult {
+	cfg, step, ok := m.loadRuntimeConfig(ctx, runtime)
+	step.Name = "runtime-web-config"
+	if !ok {
+		return step
+	}
+
+	hasBrowserPlugin := containsString(cfg.Plugins.Allow, "browser")
+	hasSearxPlugin := containsString(cfg.Plugins.Allow, "searxng")
+	hasWebSearchTool := containsString(cfg.Tools.Allow, "web_search")
+	hasWebFetchTool := containsString(cfg.Tools.Allow, "web_fetch")
+	ok := hasBrowserPlugin &&
+		hasSearxPlugin &&
+		hasWebSearchTool &&
+		hasWebFetchTool &&
+		cfg.Tools.Web.Search.Enabled &&
+		cfg.Tools.Web.Search.Provider == "searxng" &&
+		cfg.Tools.Web.Fetch.Enabled
+
+	step.OK = ok
+	step.Summary = "runtime config exposes web_search and web_fetch with SearXNG-backed search; native browser remains enabled separately"
+	step.Details = map[string]string{
+		"search_provider":            cfg.Tools.Web.Search.Provider,
+		"search_enabled":             fmt.Sprintf("%t", cfg.Tools.Web.Search.Enabled),
+		"fetch_enabled":              fmt.Sprintf("%t", cfg.Tools.Web.Fetch.Enabled),
+		"browser_headless":           fmt.Sprintf("%t", cfg.Browser.Headless),
+		"browser_plugin_enabled":     fmt.Sprintf("%t", hasBrowserPlugin),
+		"browser_in_default_toolset": fmt.Sprintf("%t", containsString(cfg.Tools.Allow, "browser")),
+	}
+	return step
+}
+
+func (m *Manager) loadRuntimeConfig(ctx context.Context, runtime string) (runtimeWebConfig, cli.VerifyStepResult, bool) {
 	commandArgs := []string{"exec", runtime, "cat", "/home/node/.openclaw/openclaw.json"}
 	result, err := m.runner.Run(ctx, "", "docker", commandArgs...)
 	if err != nil {
-		return cli.VerifyStepResult{
-			Name:    "runtime-web-config",
+		return runtimeWebConfig{}, cli.VerifyStepResult{
+			Name:    "runtime-config",
 			OK:      false,
 			Summary: fmt.Sprintf("failed to read runtime config: %v", err),
 			Command: append([]string{"docker"}, commandArgs...),
-		}
+		}, false
 	}
 
 	step := cli.VerifyStepResult{
-		Name:          "runtime-web-config",
+		Name:          "runtime-config",
 		OK:            false,
 		Command:       append([]string{"docker"}, commandArgs...),
 		ExitCode:      result.ExitCode,
@@ -283,38 +349,15 @@ func (m *Manager) verifyWebRuntimeConfig(ctx context.Context, runtime string) cl
 	}
 	if result.ExitCode != 0 {
 		step.Summary = "failed to read runtime config"
-		return step
+		return runtimeWebConfig{}, step, false
 	}
 
 	var cfg runtimeWebConfig
 	if err := json.Unmarshal([]byte(result.Stdout), &cfg); err != nil {
 		step.Summary = fmt.Sprintf("failed to parse runtime config JSON: %v", err)
-		return step
+		return runtimeWebConfig{}, step, false
 	}
-
-	hasBrowserPlugin := containsString(cfg.Plugins.Allow, "browser")
-	hasSearxPlugin := containsString(cfg.Plugins.Allow, "searxng")
-	hasWebSearchTool := containsString(cfg.Tools.Allow, "web_search")
-	hasWebFetchTool := containsString(cfg.Tools.Allow, "web_fetch")
-	hasBrowserTool := containsString(cfg.Tools.Allow, "browser")
-	ok := hasBrowserPlugin &&
-		hasSearxPlugin &&
-		hasWebSearchTool &&
-		hasWebFetchTool &&
-		hasBrowserTool &&
-		cfg.Tools.Web.Search.Enabled &&
-		cfg.Tools.Web.Search.Provider == "searxng" &&
-		cfg.Tools.Web.Fetch.Enabled
-
-	step.OK = ok
-	step.Summary = "runtime config exposes web_search, web_fetch, and browser with SearXNG-backed search"
-	step.Details = map[string]string{
-		"search_provider":  cfg.Tools.Web.Search.Provider,
-		"search_enabled":   fmt.Sprintf("%t", cfg.Tools.Web.Search.Enabled),
-		"fetch_enabled":    fmt.Sprintf("%t", cfg.Tools.Web.Fetch.Enabled),
-		"browser_headless": fmt.Sprintf("%t", cfg.Browser.Headless),
-	}
-	return step
+	return cfg, step, true
 }
 
 func runVerifyOpenClawCommand(ctx context.Context, m *Manager, runtime string, nativeArgs ...string) cli.CommandResult {

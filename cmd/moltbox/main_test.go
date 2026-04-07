@@ -251,7 +251,7 @@ func TestCLIForwardsLightweightPublicSurface(t *testing.T) {
 					Route:         payload.Route,
 					ContainerName: "ollama",
 					ExitCode:      0,
-					Stdout:        "mistral:7b-instruct-32k\n",
+					Stdout:        "gemma4:e4b-it-q4_K_M\n",
 				})
 			},
 		},

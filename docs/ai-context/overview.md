@@ -22,9 +22,12 @@ Core operating model:
 
 Runtime baseline:
 
-- local first with `ollama/mistral:7b-instruct-32k`
+- local first with `ollama/gemma4:e4b-it-q4_K_M`
+- target context is `65536`
+- Ollama baseline tuning is `parallel=2`, `flash_attention=1`, `kv_cache_type=q8_0`
 - Together fallback remains configured
 - baseline web capability is `web_search`, `web_fetch`, and native `browser`
+- default chat lane is `web_search` + `web_fetch`; browser stays available separately
 - the old Playwright/browser detour is gone from the baseline
 
 Repository split:

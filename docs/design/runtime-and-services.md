@@ -43,8 +43,12 @@ These go through `moltbox test openclaw ...` and `moltbox prod openclaw ...`.
 ## Model And Provider Baseline
 
 - primary provider: `ollama`
-- primary model: `mistral:7b-instruct-32k`
-- context window: `32768`
+- primary model: `gemma4:e4b-it-q4_K_M`
+- context window: `65536`
+- Ollama tuning defaults:
+  - `OLLAMA_NUM_PARALLEL=2`
+  - `OLLAMA_FLASH_ATTENTION=1`
+  - `OLLAMA_KV_CACHE_TYPE=q8_0`
 - fallback provider/model: Together with `Kimi K2.5`
 
 ## Web Baseline
@@ -54,6 +58,8 @@ Current gold baseline:
 - `web_search` backed by `searxng`
 - built-in `web_fetch`
 - native OpenClaw `browser`
+  - installed and operator-verifiable
+  - kept out of the default chat tool allowlist
 
 Not in the current baseline:
 
@@ -62,8 +68,9 @@ Not in the current baseline:
 
 Current caveat:
 
-- native browser is part of the baseline
-- the selected local Mistral model is still unreliable at choosing `web_fetch` and `browser` through ordinary chat without extra steering
+- native browser is part of the baseline but not the default chat lane
+- the selected local Gemma baseline is solid for concise chat, basic logic, and deterministic `web_search`/`web_fetch` probes
+- noisy fetched pages still need human judgment, and `thinking off` remains a useful per-run speed lever
 
 ## Lean Default Posture
 

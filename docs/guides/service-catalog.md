@@ -33,6 +33,7 @@ Current baseline web tooling:
 - `browser`
   - built-in OpenClaw browser surface
   - runs inside the OpenClaw runtime container with headless Chromium
+  - kept out of the default chat tool allowlist to reduce prompt/tool overhead
 
 Not part of the current baseline:
 
@@ -41,8 +42,8 @@ Not part of the current baseline:
 
 Current caveat:
 
-- browser is part of the runtime baseline
-- chat-level tool choice for `browser` and `web_fetch` is still limited by the local Mistral model
+- browser is part of the runtime baseline but not the default chat lane
+- chat-level tool choice for fetched pages still needs human judgment on the local Gemma baseline
 
 ## Deployment And Inspection
 

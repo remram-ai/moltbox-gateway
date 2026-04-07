@@ -22,18 +22,23 @@ Runtime rules:
 
 Model/provider baseline:
 
-- primary: `ollama/mistral:7b-instruct-32k`
+- primary: `ollama/gemma4:e4b-it-q4_K_M`
 - fallback: Together `Kimi K2.5`
-- context: `32768`
+- context: `65536`
+- Ollama tuning:
+  - `OLLAMA_NUM_PARALLEL=2`
+  - `OLLAMA_FLASH_ATTENTION=1`
+  - `OLLAMA_KV_CACHE_TYPE=q8_0`
 
 Web baseline:
 
 - `web_search` backed by `searxng`
 - built-in `web_fetch`
 - native OpenClaw `browser`
+- default chat lane excludes `browser`
 - no Playwright detour in the current gold baseline
 
 Current caveat:
 
-- local chat reliably handles short answers
-- heavier tool choice through chat is still model-limited on local Mistral
+- local chat reliably handles concise answers, basic logic, and deterministic fetch/search probes
+- heavier tool choice through chat is still model-limited on noisy fetched pages

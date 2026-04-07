@@ -56,14 +56,16 @@ Retired public namespaces fail explicitly:
 
 ## Live Runtime Facts
 
-- `test` and `prod` both use local Ollama with `mistral:7b-instruct-32k`
-- configured context window is `32768`
+- the next managed baseline target is local Ollama with `gemma4:e4b-it-q4_K_M`
+- target context window is `65536`
+- target Ollama tuning is `parallel=2`, `flash_attention=1`, `kv_cache_type=q8_0`
 - Together remains configured as the fallback provider
 - heartbeat is disabled
 - baseline web capability is:
   - `web_search` backed by `searxng`
   - built-in `web_fetch`
   - native OpenClaw `browser`
+    - operator-available but removed from the default chat tool lane
 - the previous Playwright/browser detour is removed from the baseline
 - `test` and `prod` no longer replay runtime history during normal service deploy
 
@@ -85,5 +87,6 @@ Retired public namespaces fail explicitly:
 
 ## Remaining Gaps
 
-- the local model is still not perfectly reliable at choosing `web_fetch` and `browser` through ordinary chat
+- the local model is still not perfectly reliable at choosing the best fetched source on noisy pages
+- service-plane deployment still depends on host repo state, and the current AI operator path does not have a clean repo-sync flow for `moltbox-services` or `moltbox-runtime`
 - native OpenClaw restore is still unproven as a primary runtime recovery method
