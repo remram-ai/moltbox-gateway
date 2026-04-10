@@ -40,10 +40,14 @@ Required paths must be:
 Human admin:
 
 - preserved trusted admin path
+- current host account: `jpekovitch`
+- current workstation alias: `moltbox` or `moltbox-admin`
 
 AI test operator:
 
 - forced-command SSH identity
+- current host account: `moltbox-ai-test`
+- current workstation alias: `moltbox-ai-test`
 - may use the CLI for `test`
 - may mutate `test`, `ollama`, and `searxng`
 - no arbitrary shell
@@ -51,6 +55,8 @@ AI test operator:
 AI prod operator:
 
 - forced-command SSH identity
+- current host account: `moltbox-ai-prod`
+- current workstation alias: `moltbox-ai-prod`
 - may use the CLI for prod diagnostics
 - no prod mutation
 - no arbitrary shell
@@ -58,6 +64,26 @@ AI prod operator:
 Break-glass admin:
 
 - elevated emergency access
+- current host account: `moltbox-breakglass`
+- current workstation alias: `moltbox-breakglass`
+
+## Current Key Discovery
+
+Current workstation SSH aliases resolve through `C:\Users\Jason\.ssh\config`.
+
+Current live host key state:
+
+- `C:\Users\Jason\.ssh\id_ed25519` is currently installed on:
+  - `jpekovitch`
+  - `moltbox-ai-test`
+  - `moltbox-ai-prod`
+  - `moltbox-breakglass`
+- the legacy local key names `jason-codex` and `codex-bootstrap` still exist on the workstation, but they are not the current installed host keys
+
+Legacy-name rule:
+
+- treat `jason-codex` and `codex-bootstrap` as historical names only
+- use the role-based account names and SSH aliases above for current operations and future documentation
 
 ## Normal Operations Rule
 

@@ -118,10 +118,14 @@ Checkpoint and replay are not the normal recovery story.
 Human admin:
 
 - retained for trusted administration
+- current host account: `jpekovitch`
+- current SSH aliases: `moltbox`, `moltbox-admin`
 
 AI test operator:
 
 - forced-command SSH
+- current host account: `moltbox-ai-test`
+- current SSH alias: `moltbox-ai-test`
 - CLI-driven mutation on `test`
 - limited service-plane mutation for `test`, `ollama`, and `searxng`
 - routine verification through `moltbox test verify ...`
@@ -129,6 +133,8 @@ AI test operator:
 AI prod operator:
 
 - forced-command SSH
+- current host account: `moltbox-ai-prod`
+- current SSH alias: `moltbox-ai-prod`
 - non-mutating diagnostics on `prod`
 - no prod mutation rights
 - routine verification through `moltbox prod verify runtime`
@@ -136,6 +142,29 @@ AI prod operator:
 Break-glass admin:
 
 - emergency use only
+- current host account: `moltbox-breakglass`
+- current SSH alias: `moltbox-breakglass`
+- current live behavior: full shell plus passwordless `sudo`
+
+## SSH Key Discovery
+
+On the current operator workstation, the active key path for all of the accounts above is:
+
+- `C:\Users\Jason\.ssh\id_ed25519`
+
+Current live host state uses that one key for:
+
+- `jpekovitch`
+- `moltbox-ai-test`
+- `moltbox-ai-prod`
+- `moltbox-breakglass`
+
+Legacy local keys:
+
+- `C:\Users\Jason\.ssh\jason-codex`
+- `C:\Users\Jason\.ssh\codex-bootstrap`
+
+Those legacy key names are not the current installed host keys and should not be treated as the current account names or the current onboarding path.
 
 ## Web Capability
 

@@ -32,7 +32,19 @@ Identity model:
 - human admin retains sudo
 - `moltbox-ai-test` gets forced-command test-side access
 - `moltbox-ai-prod` gets forced-command prod-inspection access
-- one break-glass admin account exists
+- `moltbox-breakglass` is the break-glass admin account
+
+Current operator-workstation aliases:
+
+- `moltbox` or `moltbox-admin` -> `jpekovitch`
+- `moltbox-ai-test` -> `moltbox-ai-test`
+- `moltbox-ai-prod` -> `moltbox-ai-prod`
+- `moltbox-breakglass` -> `moltbox-breakglass`
+
+Current key discovery:
+
+- the live host currently accepts `C:\Users\Jason\.ssh\id_ed25519` for all four accounts above
+- local keys named `jason-codex` and `codex-bootstrap` are legacy workstation artifacts, not the current host-account names
 
 Backup model:
 

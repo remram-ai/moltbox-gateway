@@ -13,6 +13,13 @@ Official command families:
 - `moltbox ollama ...`
 - `moltbox secret ...`
 
+Current SSH entry points:
+
+- `ssh moltbox` or `ssh moltbox-admin` for the human admin path
+- `ssh moltbox-ai-test` for the restricted test operator lane
+- `ssh moltbox-ai-prod` for the restricted prod diagnostics lane
+- `ssh moltbox-breakglass` for emergency admin only
+
 Normal workflows:
 
 - inspect appliance:
@@ -37,3 +44,8 @@ Do not use as normal paths:
 - raw Docker
 - replay-era namespaces
 - break-glass SSH when the official CLI can do the job
+
+Legacy naming note:
+
+- do not use `jason-codex` or `codex-bootstrap` as the current role names
+- use the role-based aliases above and the Gateway host-ops docs as the current source of truth
