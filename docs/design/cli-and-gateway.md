@@ -53,7 +53,7 @@ The gateway also owns a small verification surface for restricted operators:
 - `moltbox test verify web`
 - `moltbox prod verify runtime`
 
-Those checks exist so routine validation can stay inside the restricted SSH roles without shell chaining or break-glass access.
+Those checks exist so routine validation can stay inside the restricted SSH roles without shell chaining or break-glass access. In the current baseline, routine validation normally uses `runtime` and `web`; `verify browser` remains an explicit diagnostic path only when a browser-enabled runtime is intentionally staged.
 
 ## Snapshot Guardrails
 

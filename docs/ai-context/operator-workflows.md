@@ -27,7 +27,6 @@ Normal workflows:
   - `moltbox service list`
 - verify runtimes:
   - `moltbox test verify runtime`
-  - `moltbox test verify browser`
   - `moltbox test verify web`
   - `moltbox prod verify runtime`
 - mutate service plane:

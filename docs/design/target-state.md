@@ -34,9 +34,9 @@ Gold baseline web capability:
 
 - `web_search`
 - `web_fetch`
-- native OpenClaw `browser`
+- native `memory-core` disabled in the default local lane
 
-The steady-state browser path is the official OpenClaw browser surface backed by headless Chromium inside the runtime. The old Playwright detour is not part of the target model.
+The steady-state local baseline is intentionally limited to `web_search` and `web_fetch`. The old Playwright detour is not part of the target model, and browser should only be staged separately for diagnostics if it is ever needed again.
 
 ## Target Recovery Model
 

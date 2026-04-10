@@ -23,8 +23,8 @@ Runtime rules:
 Model/provider baseline:
 
 - primary: `ollama/gemma4:e4b-it-q4_K_M`
-- fallback: Together `Kimi K2.5`
-- context: `65536`
+- default chat lane: Gemma-only
+- context: `131072`
 - Ollama tuning:
   - `OLLAMA_NUM_PARALLEL=2`
   - `OLLAMA_FLASH_ATTENTION=1`
@@ -34,8 +34,8 @@ Web baseline:
 
 - `web_search` backed by `searxng`
 - built-in `web_fetch`
-- native OpenClaw `browser`
-- default chat lane excludes `browser`
+- native `memory-core` disabled in the default local lane
+- browser is not part of the default local baseline
 - no Playwright detour in the current gold baseline
 
 Current caveat:

@@ -61,14 +61,10 @@ Use native OpenClaw CLI on `test`:
 - `moltbox test openclaw models status --json`
 - `moltbox test openclaw backup create --verify`
 - `moltbox test openclaw agent --session-id smoke-hi --message "hi" --json`
-- `moltbox test openclaw browser status --json`
-- `moltbox test openclaw browser tabs --json`
 
 Run operator-grade verification on `test`:
 
 - `moltbox test verify runtime`
-- `moltbox test verify browser`
-- `moltbox test verify browser https://example.com`
 - `moltbox test verify web`
 
 Use native OpenClaw CLI on `prod`:
@@ -172,17 +168,15 @@ Baseline web capability is:
 
 - `web_search` backed by `searxng`
 - built-in `web_fetch`
-- native OpenClaw `browser`
+- native `memory-core` disabled in the default local lane
 
-The old Playwright-based browser detour is removed from the baseline.
+The old Playwright-based browser detour stays removed from the baseline.
 
 Important caveat:
 
-- the native browser surface is enabled and healthy
 - ordinary local Gemma chat is faster and more trustworthy for `web_search` and `web_fetch` than the previous Mistral baseline, but chat-level tool choice still needs human judgment on noisy pages
-- browser remains available, but it is no longer part of the default chat tool lane
-- if a tool-heavy web task matters, validate it in `test` before treating it as a gold-path local-chat behavior
-- `moltbox test verify web` proves backend/config availability, not that the local chat model will choose the tools reliably
+- browser is not part of the default local baseline and should only be staged intentionally for a separate diagnostic path
+- `moltbox test verify web` proves backend/config availability, not that the local chat model will choose `web_search` or `web_fetch` reliably
 
 ## Retired Public Surfaces
 

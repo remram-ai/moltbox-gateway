@@ -44,12 +44,12 @@ These go through `moltbox test openclaw ...` and `moltbox prod openclaw ...`.
 
 - primary provider: `ollama`
 - primary model: `gemma4:e4b-it-q4_K_M`
-- context window: `65536`
+- default chat lane: Gemma-only
+- context window: `131072`
 - Ollama tuning defaults:
   - `OLLAMA_NUM_PARALLEL=2`
   - `OLLAMA_FLASH_ATTENTION=1`
   - `OLLAMA_KV_CACHE_TYPE=q8_0`
-- fallback provider/model: Together with `Kimi K2.5`
 
 ## Web Baseline
 
@@ -57,9 +57,8 @@ Current gold baseline:
 
 - `web_search` backed by `searxng`
 - built-in `web_fetch`
-- native OpenClaw `browser`
-  - installed and operator-verifiable
-  - kept out of the default chat tool allowlist
+- native `memory-core` disabled in the default local lane
+- browser is not part of the default local baseline
 
 Not in the current baseline:
 
@@ -68,7 +67,8 @@ Not in the current baseline:
 
 Current caveat:
 
-- native browser is part of the baseline but not the default chat lane
+- browser is not part of the default local baseline
+- native `memory-core` is disabled in the default local lane
 - the selected local Gemma baseline is solid for concise chat, basic logic, and deterministic `web_search`/`web_fetch` probes
 - noisy fetched pages still need human judgment, and `thinking off` remains a useful per-run speed lever
 

@@ -40,10 +40,10 @@ That path is not documented as steady-state behavior anymore.
 
 ## Native Browser Status
 
-OpenClaw's native browser surface is enabled and healthy on this appliance through the official OpenClaw browser path.
+OpenClaw's native browser surface is not part of the default local baseline on this appliance.
 
 Current caveat:
 
-- the runtime/browser integration is proven
-- the chosen local model is still inconsistent at deciding to use `web_fetch` or `browser` through ordinary chat
+- browser should only be staged intentionally for a separate diagnostic path
+- the chosen local Gemma baseline is solid for `web_search` and `web_fetch`, but noisy fetched pages still need human judgment
 - for important tool-heavy tasks, treat `test` validation or a stronger model as the reliability boundary

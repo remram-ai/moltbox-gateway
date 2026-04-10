@@ -61,7 +61,7 @@ moltbox
 - Web baseline is:
   - `web_search` via `searxng`
   - built-in `web_fetch`
-  - native OpenClaw `browser`
+  - native `memory-core` disabled in the default local lane
 - Do not reintroduce Playwright wrapper architecture as the intended baseline.
 - Do not use raw Docker as the normal path.
 - Do not use break-glass SSH for routine operations if the CLI surface can do the job.
@@ -98,7 +98,6 @@ moltbox
 Use the official verification surfaces whenever possible:
 
 - `moltbox test verify runtime`
-- `moltbox test verify browser`
 - `moltbox test verify web`
 - `moltbox prod verify runtime`
 

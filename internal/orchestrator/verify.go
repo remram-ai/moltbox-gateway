@@ -17,7 +17,7 @@ const (
 	verifySearchURL         = "http://searxng:8080/search?q=searxng&format=json"
 	verifyLocalBaselineID   = "gemma4:e4b-it-q4_K_M"
 	verifyLocalBaseline     = "ollama/gemma4:e4b-it-q4_K_M"
-	verifyLocalContext      = 65536
+	verifyLocalContext      = 131072
 )
 
 type runtimeWebConfig struct {
@@ -29,12 +29,12 @@ type runtimeWebConfig struct {
 			} `json:"model"`
 		} `json:"defaults"`
 	} `json:"agents"`
-	Browser struct {
-		Headless bool `json:"headless"`
-	} `json:"browser"`
 	Plugins struct {
-		Allow   []string                     `json:"allow"`
-		Entries map[string]json.RawMessage   `json:"entries"`
+		Allow []string `json:"allow"`
+		Slots struct {
+			Memory string `json:"memory"`
+		} `json:"slots"`
+		Entries map[string]json.RawMessage `json:"entries"`
 	} `json:"plugins"`
 	Tools struct {
 		Allow []string `json:"allow"`
@@ -138,14 +138,6 @@ func (m *Manager) verifyRuntimeStatus(ctx context.Context, route *cli.Route, res
 	))
 
 	appendVerifyStep(result, m.verifyRuntimeBaselineConfig(ctx, route.Runtime))
-
-	browser := runVerifyOpenClawCommand(ctx, m, route.Runtime, "browser", "status")
-	appendVerifyStep(result, commandVerifyStep(
-		"browser-status",
-		browser,
-		browser.OK && strings.Contains(browser.Stdout, "enabled: true") && strings.Contains(browser.Stdout, "detectedBrowser: chromium"),
-		"native browser is enabled and Chromium is detected",
-	))
 }
 
 func (m *Manager) verifyRuntimeBrowser(ctx context.Context, route *cli.Route, targetURL string, result *cli.RuntimeVerifyResult) {
@@ -219,7 +211,7 @@ func (m *Manager) verifyRuntimeWeb(ctx context.Context, route *cli.Route, result
 	appendVerifyStep(result, m.verifyWebRuntimeConfig(ctx, route.Runtime))
 
 	result.Caveats = append(result.Caveats,
-		"web verify proves backend/config availability, not that the local chat model will reliably choose web_search, web_fetch, or browser on its own",
+		"web verify proves backend/config availability, not that the local chat model will reliably choose web_search or web_fetch on its own",
 	)
 }
 
@@ -285,7 +277,7 @@ func (m *Manager) verifyRuntimeBaselineConfig(ctx context.Context, runtime strin
 	contextTokens := cfg.Agents.Defaults.ContextTokens
 	step.Name = "runtime-baseline-config"
 	step.OK = strings.EqualFold(modelPrimary, verifyLocalBaseline) && contextTokens == verifyLocalContext
-	step.Summary = "runtime config uses the Gemma 4 E4B 64K local baseline"
+	step.Summary = "runtime config uses the Gemma 4 E4B 128K local baseline"
 	step.Details = map[string]string{
 		"primary_model":    modelPrimary,
 		"context_tokens":   fmt.Sprintf("%d", contextTokens),
@@ -304,25 +296,46 @@ func (m *Manager) verifyWebRuntimeConfig(ctx context.Context, runtime string) cl
 
 	hasBrowserPlugin := containsString(cfg.Plugins.Allow, "browser")
 	hasSearxPlugin := containsString(cfg.Plugins.Allow, "searxng")
+	hasOllamaPlugin := containsString(cfg.Plugins.Allow, "ollama")
 	hasWebSearchTool := containsString(cfg.Tools.Allow, "web_search")
 	hasWebFetchTool := containsString(cfg.Tools.Allow, "web_fetch")
-	ok := hasBrowserPlugin &&
+	hasMemoryTools := containsString(cfg.Tools.Allow, "memory_search") ||
+		containsString(cfg.Tools.Allow, "memory_get")
+	pluginAllow := normalizedDistinctStrings(cfg.Plugins.Allow)
+	toolAllow := normalizedDistinctStrings(cfg.Tools.Allow)
+	onlyExpectedPlugins := true
+	for _, plugin := range pluginAllow {
+		if !strings.EqualFold(plugin, "searxng") && !strings.EqualFold(plugin, "ollama") {
+			onlyExpectedPlugins = false
+			break
+		}
+	}
+	memoryDisabled := strings.EqualFold(strings.TrimSpace(cfg.Plugins.Slots.Memory), "none")
+	ok = !hasBrowserPlugin &&
 		hasSearxPlugin &&
+		(len(pluginAllow) == 1 || (len(pluginAllow) == 2 && hasOllamaPlugin)) &&
+		onlyExpectedPlugins &&
+		len(toolAllow) == 2 &&
 		hasWebSearchTool &&
 		hasWebFetchTool &&
+		!hasMemoryTools &&
 		cfg.Tools.Web.Search.Enabled &&
 		cfg.Tools.Web.Search.Provider == "searxng" &&
+		memoryDisabled &&
 		cfg.Tools.Web.Fetch.Enabled
 
 	step.OK = ok
-	step.Summary = "runtime config exposes web_search and web_fetch with SearXNG-backed search; native browser remains enabled separately"
+	step.Summary = "runtime config exposes only web_search and web_fetch with SearXNG-backed search; browser and native memory stay out of the default lane"
 	step.Details = map[string]string{
-		"search_provider":            cfg.Tools.Web.Search.Provider,
-		"search_enabled":             fmt.Sprintf("%t", cfg.Tools.Web.Search.Enabled),
-		"fetch_enabled":              fmt.Sprintf("%t", cfg.Tools.Web.Fetch.Enabled),
-		"browser_headless":           fmt.Sprintf("%t", cfg.Browser.Headless),
-		"browser_plugin_enabled":     fmt.Sprintf("%t", hasBrowserPlugin),
-		"browser_in_default_toolset": fmt.Sprintf("%t", containsString(cfg.Tools.Allow, "browser")),
+		"search_provider":             cfg.Tools.Web.Search.Provider,
+		"search_enabled":              fmt.Sprintf("%t", cfg.Tools.Web.Search.Enabled),
+		"fetch_enabled":               fmt.Sprintf("%t", cfg.Tools.Web.Fetch.Enabled),
+		"plugins_allow":               strings.Join(pluginAllow, ","),
+		"tools_allow":                 strings.Join(toolAllow, ","),
+		"memory_slot":                 strings.TrimSpace(cfg.Plugins.Slots.Memory),
+		"browser_plugin_enabled":      fmt.Sprintf("%t", hasBrowserPlugin),
+		"browser_in_default_toolset":  fmt.Sprintf("%t", containsString(cfg.Tools.Allow, "browser")),
+		"memory_tools_in_default_set": fmt.Sprintf("%t", hasMemoryTools),
 	}
 	return step
 }
@@ -409,4 +422,22 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func normalizedDistinctStrings(items []string) []string {
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
 }

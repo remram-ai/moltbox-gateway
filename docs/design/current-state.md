@@ -57,15 +57,14 @@ Retired public namespaces fail explicitly:
 ## Live Runtime Facts
 
 - the next managed baseline target is local Ollama with `gemma4:e4b-it-q4_K_M`
-- target context window is `65536`
+- target context window is `131072`
 - target Ollama tuning is `parallel=2`, `flash_attention=1`, `kv_cache_type=q8_0`
-- Together remains configured as the fallback provider
+- the default local chat lane is Gemma-only with no configured fallback provider
 - heartbeat is disabled
 - baseline web capability is:
   - `web_search` backed by `searxng`
   - built-in `web_fetch`
-  - native OpenClaw `browser`
-    - operator-available but removed from the default chat tool lane
+  - native `memory-core` disabled in the default local lane
 - the previous Playwright/browser detour is removed from the baseline
 - `test` and `prod` no longer replay runtime history during normal service deploy
 
