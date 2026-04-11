@@ -25,6 +25,8 @@ const (
 	runtimePluginSourceGit   = "git"
 	runtimePluginSourceLocal = "local"
 	runtimePluginSourceNPM   = "npm"
+	runtimeStateUID          = 0
+	runtimeStateGID          = 0
 )
 
 var runtimeSkillAliases = map[string]string{
@@ -111,6 +113,17 @@ var managedRuntimeWorkspaceFiles = []string{
 	"SOUL.md",
 	"TOOLS.md",
 	"IDENTITY.md",
+	"MEMORY.md",
+	"USER.md",
+	"HEARTBEAT.md",
+}
+
+var managedRuntimeWorkspaceCleanupFiles = []string{
+	"AGENTS.md",
+	"SOUL.md",
+	"TOOLS.md",
+	"IDENTITY.md",
+	"MEMORY.md",
 	"USER.md",
 	"HEARTBEAT.md",
 	"BOOTSTRAP.md",
@@ -140,6 +153,11 @@ func (m *Manager) syncRuntimeManagedState(service, runtimeRoot string) error {
 		destinationName := strings.TrimSuffix(name, ".template")
 		destinationPath := filepath.Join(runtimeRoot, destinationName)
 		if strings.HasSuffix(name, ".template") {
+			if _, err := os.Stat(destinationPath); err == nil {
+				continue
+			} else if !errorsIsNotExist(err) {
+				return err
+			}
 			if err := renderFile(sourcePath, destinationPath, context); err != nil {
 				return err
 			}
@@ -170,7 +188,7 @@ func (m *Manager) syncRuntimeWorkspaceBaseline(service, runtimeRoot string) erro
 		return err
 	}
 
-	for _, name := range managedRuntimeWorkspaceFiles {
+	for _, name := range managedRuntimeWorkspaceCleanupFiles {
 		sourcePath := filepath.Join(sourceRoot, name)
 		destinationPath := filepath.Join(workspaceRoot, name)
 		data, readErr := os.ReadFile(sourcePath)
@@ -962,10 +980,12 @@ func (m *Manager) installSkillFromGatewayState(ctx context.Context, service stri
 	}
 
 	moveCommand := fmt.Sprintf(
-		"rm -rf %s && mv %s %s && chown -R 1000:1000 %s",
+		"rm -rf %s && mv %s %s && chown -R %d:%d %s",
 		shellQuote(destination),
 		shellQuote(stagingPath),
 		shellQuote(destination),
+		runtimeStateUID,
+		runtimeStateGID,
 		shellQuote(destination),
 	)
 	moveResult, err := m.runner.Run(ctx, "", "docker", "exec", "-u", "0", service, "sh", "-lc", moveCommand)
@@ -1077,7 +1097,7 @@ func ensureRuntimeStateOwnership(root string) error {
 			}
 			return err
 		}
-		if err := os.Chown(path, 1000, 1000); err != nil {
+		if err := os.Chown(path, runtimeStateUID, runtimeStateGID); err != nil {
 			if errorsIsNotExist(err) {
 				return nil
 			}
@@ -2065,9 +2085,11 @@ func (m *Manager) ensureRuntimePluginRoot(ctx context.Context, service string) e
 	stateRoot := m.runtimeOpenClawStateRoot(ctx, service)
 	extensionsRoot := path.Join(stateRoot, "extensions")
 	command := fmt.Sprintf(
-		"mkdir -p %s %s && chown 1000:1000 %s %s && chmod 0755 %s %s",
+		"mkdir -p %s %s && chown %d:%d %s %s && chmod 0755 %s %s",
 		shellQuote(stateRoot),
 		shellQuote(extensionsRoot),
+		runtimeStateUID,
+		runtimeStateGID,
 		shellQuote(stateRoot),
 		shellQuote(extensionsRoot),
 		shellQuote(stateRoot),

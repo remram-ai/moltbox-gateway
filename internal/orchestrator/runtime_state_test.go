@@ -530,6 +530,35 @@ func TestRuntimeSkillRollbackRemovesReplayAndRestoresBaseline(t *testing.T) {
 	}
 }
 
+func TestDeployServicePreservesExistingRuntimeOpenClawConfig(t *testing.T) {
+	t.Parallel()
+
+	manager, _, _, runtimeRoot, _ := newRuntimeTestManager(t)
+
+	reloadRoute := &cli.Route{Resource: "dev", Kind: cli.KindRuntimeAction, Action: "reload", Environment: "dev", Runtime: "openclaw-dev"}
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("initial DeployService() error = %v", err)
+	}
+
+	configPath := filepath.Join(runtimeRoot, "openclaw.json")
+	custom := "{\n  \"gateway\": {\n    \"mode\": \"local\",\n    \"auth\": {\n      \"mode\": \"token\",\n      \"token\": \"persist-me\"\n    }\n  },\n  \"meta\": {\n    \"lastTouchedVersion\": \"test\"\n  }\n}\n"
+	if err := os.WriteFile(configPath, []byte(custom), 0o600); err != nil {
+		t.Fatalf("write custom runtime config: %v", err)
+	}
+
+	if _, err := manager.DeployService(context.Background(), reloadRoute, "dev"); err != nil {
+		t.Fatalf("second DeployService() error = %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read runtime config: %v", err)
+	}
+	if string(data) != custom {
+		t.Fatalf("runtime config overwritten on redeploy:\n%s", data)
+	}
+}
+
 func TestRuntimeSkillDeploySkipsReplayWhenSkillAlreadyInBaseline(t *testing.T) {
 	t.Parallel()
 

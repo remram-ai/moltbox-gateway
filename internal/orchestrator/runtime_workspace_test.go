@@ -17,6 +17,7 @@ func TestPrepareRuntimeDeploySyncsManagedWorkspaceBaseline(t *testing.T) {
 	runtimeStateRoot := filepath.Join(root, "runtime-state")
 
 	mustWriteFile(t, filepath.Join(runtimeRepoRoot, "openclaw-test", "workspace", "AGENTS.md"), "# AGENTS\nlean\n")
+	mustWriteFile(t, filepath.Join(runtimeRepoRoot, "openclaw-test", "workspace", "MEMORY.md"), "# MEMORY\nbaseline\n")
 	mustWriteFile(t, filepath.Join(runtimeRepoRoot, "openclaw-test", "workspace", "SOUL.md"), "# SOUL\nlean\n")
 
 	existingWorkspace := filepath.Join(runtimeStateRoot, "openclaw-test", "workspace")
@@ -44,6 +45,14 @@ func TestPrepareRuntimeDeploySyncsManagedWorkspaceBaseline(t *testing.T) {
 	}
 	if string(agentsData) != "# AGENTS\nlean\n" {
 		t.Fatalf("AGENTS.md = %q, want committed baseline", string(agentsData))
+	}
+
+	memoryBaselineData, err := os.ReadFile(filepath.Join(existingWorkspace, "MEMORY.md"))
+	if err != nil {
+		t.Fatalf("read synced MEMORY.md: %v", err)
+	}
+	if string(memoryBaselineData) != "# MEMORY\nbaseline\n" {
+		t.Fatalf("MEMORY.md = %q, want committed baseline", string(memoryBaselineData))
 	}
 
 	if _, err := os.Stat(filepath.Join(existingWorkspace, "BOOTSTRAP.md")); !os.IsNotExist(err) {
