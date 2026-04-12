@@ -820,13 +820,14 @@ func (m *Manager) RuntimeOpenClaw(ctx context.Context, route *cli.Route) (cli.Co
 			snapshotRecord = record
 		}
 	}
+	containerName := m.runtimeContainerName(route.Runtime)
 	if shouldClearBrowserSingletonLocks(route.NativeArgs) {
-		if _, err := m.runner.Run(ctx, "", "docker", "exec", route.Runtime, "sh", "-lc", "find /home/node/.openclaw/browser \\( -type f -o -type l \\) \\( -name 'SingletonCookie' -o -name 'SingletonLock' -o -name 'SingletonSocket' \\) -delete 2>/dev/null || true"); err != nil {
+		if _, err := m.runner.Run(ctx, "", "docker", "exec", containerName, "sh", "-lc", "find /home/node/.openclaw/browser \\( -type f -o -type l \\) \\( -name 'SingletonCookie' -o -name 'SingletonLock' -o -name 'SingletonSocket' \\) -delete 2>/dev/null || true"); err != nil {
 			return cli.CommandResult{}, err
 		}
 	}
 
-	commandArgs := append([]string{"exec", route.Runtime, "openclaw"}, route.NativeArgs...)
+	commandArgs := append([]string{"exec", containerName, "openclaw"}, route.NativeArgs...)
 	result, err := m.runner.Run(ctx, "", "docker", commandArgs...)
 	if err != nil {
 		return cli.CommandResult{}, err
@@ -851,12 +852,28 @@ func (m *Manager) RuntimeOpenClaw(ctx context.Context, route *cli.Route) (cli.Co
 	return cli.CommandResult{
 		OK:            result.ExitCode == 0,
 		Route:         route,
-		ContainerName: route.Runtime,
+		ContainerName: containerName,
 		Command:       append([]string{"docker"}, commandArgs...),
 		Stdout:        result.Stdout,
 		Stderr:        result.Stderr,
 		ExitCode:      result.ExitCode,
 	}, nil
+}
+
+func (m *Manager) runtimeContainerName(service string) string {
+	canonicalService := canonicalServiceName(service)
+	definition, err := m.LoadServiceDefinition(canonicalService)
+	if err != nil {
+		return canonicalService
+	}
+	if len(definition.ContainerNames) == 0 {
+		return canonicalService
+	}
+	containerName := strings.TrimSpace(definition.ContainerNames[0])
+	if containerName == "" {
+		return canonicalService
+	}
+	return containerName
 }
 
 func shouldClearBrowserSingletonLocks(nativeArgs []string) bool {

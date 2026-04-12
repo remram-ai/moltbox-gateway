@@ -151,7 +151,11 @@ func (s *Server) handleServiceDeploy(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
+	timeout := 2 * time.Minute
+	if route.Subject == "dev-sandbox" {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), timeout)
 	defer cancel()
 
 	result, err := s.orchestrator.DeployService(ctx, route, route.Subject)
@@ -278,7 +282,11 @@ func (s *Server) handleServicePassthrough(writer http.ResponseWriter, request *h
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
+	timeout := 2 * time.Minute
+	if payload.Route.Subject == "sandbox" {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), timeout)
 	defer cancel()
 
 	result, err := s.orchestrator.ServicePassthrough(ctx, payload.Route)

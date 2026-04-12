@@ -77,6 +77,8 @@ func (m *Manager) RuntimeVerify(ctx context.Context, route *cli.Route) (cli.Runt
 		m.verifyRuntimeBrowser(ctx, route, targetURL, &result)
 	case "web":
 		m.verifyRuntimeWeb(ctx, route, &result)
+	case "sandbox":
+		m.verifyRuntimeSandbox(ctx, route, &result)
 	default:
 		return cli.RuntimeVerifyResult{}, fmt.Errorf("unsupported verify check %q", route.Subject)
 	}
@@ -341,7 +343,7 @@ func (m *Manager) verifyWebRuntimeConfig(ctx context.Context, runtime string) cl
 }
 
 func (m *Manager) loadRuntimeConfig(ctx context.Context, runtime string) (runtimeWebConfig, cli.VerifyStepResult, bool) {
-	commandArgs := []string{"exec", runtime, "cat", "/home/node/.openclaw/openclaw.json"}
+	commandArgs := []string{"exec", m.runtimeContainerName(runtime), "cat", "/home/node/.openclaw/openclaw.json"}
 	result, err := m.runner.Run(ctx, "", "docker", commandArgs...)
 	if err != nil {
 		return runtimeWebConfig{}, cli.VerifyStepResult{

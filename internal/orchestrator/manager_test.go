@@ -988,6 +988,59 @@ func TestRuntimeOpenClawMutationKindDetectsRealMutations(t *testing.T) {
 	}
 }
 
+func TestRuntimeOpenClawUsesResolvedContainerName(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	runtimeRoot := filepath.Join(root, "runtime-repo")
+	stateRoot := filepath.Join(root, "state")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-test", "service.yaml"), "compose_project: openclaw-test-slice3\ncontainer_names:\n  - openclaw-test-slice3\nruntime_required: true\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "openclaw-test", "openclaw.json.template"), "{}\n")
+
+	runner := &fakeRunner{
+		results: []command.Result{
+			{Stdout: "{\"ok\":true}\n", ExitCode: 0},
+		},
+	}
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
+		},
+	}, fakeInspector{}, runner, nil)
+
+	result, err := manager.RuntimeOpenClaw(context.Background(), &cli.Route{
+		Resource:   "test",
+		Kind:       cli.KindRuntimeNative,
+		Action:     "openclaw",
+		Runtime:    "openclaw-test",
+		NativeArgs: []string{"health", "--json"},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeOpenClaw() error = %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("RuntimeOpenClaw() result = %#v, want ok", result)
+	}
+	if result.ContainerName != "openclaw-test-slice3" {
+		t.Fatalf("result.ContainerName = %q, want openclaw-test-slice3", result.ContainerName)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("len(runner.commands) = %d, want 1", len(runner.commands))
+	}
+	if got := runner.commands[0]; len(got) < 4 || got[0] != "docker" || got[1] != "exec" || got[2] != "openclaw-test-slice3" || got[3] != "openclaw" {
+		t.Fatalf("runner.commands[0] = %#v, want docker exec openclaw-test-slice3 openclaw ...", got)
+	}
+}
+
 func TestRestartServiceUsesComposeRestartLifecycle(t *testing.T) {
 	t.Parallel()
 

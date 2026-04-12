@@ -717,6 +717,49 @@ func TestSSHWrapperModeTestOperatorAllowsVerifyBrowser(t *testing.T) {
 	}
 }
 
+func TestSSHWrapperModeTestOperatorAllowsVerifySandbox(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", request.Method)
+		}
+		if request.URL.Path != "/runtime/verify" {
+			t.Fatalf("path = %s, want /runtime/verify", request.URL.Path)
+		}
+
+		var payload cli.RouteRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.Route == nil {
+			t.Fatal("payload.route = nil")
+		}
+		if payload.Route.Kind != cli.KindRuntimeVerify || payload.Route.Subject != "sandbox" {
+			t.Fatalf("payload.route = %#v, want verify sandbox route", payload.Route)
+		}
+
+		_ = json.NewEncoder(writer).Encode(cli.RuntimeVerifyResult{
+			OK:          true,
+			Route:       payload.Route,
+			Environment: "test",
+			Runtime:     "openclaw-test",
+			Check:       "sandbox",
+			Summary:     "test verify sandbox passed",
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("MOLTBOX_GATEWAY_URL", server.URL)
+
+	var stdout strings.Builder
+	code := run([]string{
+		"__ssh-wrapper=test-operator",
+		`moltbox test verify sandbox`,
+	}, &stdout, ioDiscard{})
+	if code != cli.ExitOK {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)
+	}
+}
+
 func TestSSHWrapperModeTestOperatorAllowsGatewayRepoSync(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost {
