@@ -25,6 +25,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/service/passthrough", s.handleServicePassthrough)
 	mux.HandleFunc("/logs", s.handleGatewayLogs)
 	mux.HandleFunc("/update", s.handleGatewayUpdate)
+	mux.HandleFunc("/repo-sync", s.handleGatewayRepoSync)
 	mux.HandleFunc("/runtime/openclaw", s.handleRuntimeOpenClaw)
 	mux.HandleFunc("/runtime/verify", s.handleRuntimeVerify)
 	mux.HandleFunc("/token/create", s.handleTokenCreate)
@@ -122,14 +123,7 @@ func (s *Server) handleServiceStatus(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	missing := true
-	for _, container := range result.Containers {
-		if container.Present {
-			missing = false
-			break
-		}
-	}
-	if missing {
+	if !result.Present {
 		s.writeJSON(writer, http.StatusNotFound, cli.Error(
 			route,
 			"service_not_found",
@@ -372,6 +366,38 @@ func (s *Server) handleGatewayUpdate(writer http.ResponseWriter, request *http.R
 		))
 		return
 	}
+	s.writeJSON(writer, http.StatusOK, result)
+}
+
+func (s *Server) handleGatewayRepoSync(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		s.writeJSON(writer, http.StatusMethodNotAllowed, cli.Error(nil, "parse_error", "method not allowed", "use POST /repo-sync"))
+		return
+	}
+
+	payload, ok := s.parseRouteRequest(writer, request, "send JSON with the parsed gateway repo-sync route")
+	if !ok {
+		return
+	}
+	if payload.Route == nil || payload.Route.Kind != cli.KindGateway || payload.Route.Action != "repo-sync" {
+		s.writeJSON(writer, http.StatusBadRequest, cli.Error(payload.Route, "parse_error", "missing gateway repo-sync route", "use: gateway repo-sync services|runtime|all"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(request.Context(), 5*time.Minute)
+	defer cancel()
+
+	result, err := s.orchestrator.GatewayRepoSync(ctx, payload.Route)
+	if err != nil {
+		s.writeJSON(writer, http.StatusBadGateway, cli.Error(
+			payload.Route,
+			"gateway_repo_sync_failed",
+			"failed to sync managed repos",
+			err.Error(),
+		))
+		return
+	}
+
 	s.writeJSON(writer, http.StatusOK, result)
 }
 

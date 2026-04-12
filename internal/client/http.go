@@ -31,6 +31,8 @@ func (c *HTTPClient) Execute(route *cli.Route, secretValue string) ([]byte, erro
 	switch {
 	case route.Kind == cli.KindGateway && route.Action == "status":
 		return c.get("/status")
+	case route.Kind == cli.KindGateway && route.Action == "repo-sync":
+		return c.post("/repo-sync", cli.RouteRequest{Route: route})
 	case route.Kind == cli.KindService && route.Action == "list":
 		return c.get("/service/list")
 	case route.Kind == cli.KindService && route.Action == "status":

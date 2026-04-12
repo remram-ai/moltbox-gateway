@@ -56,12 +56,13 @@ var runtimeMappings = map[string]string{
 }
 
 var publicServices = map[string]string{
-	"gateway":    "gateway",
-	"caddy":      "caddy",
-	"ollama":     "ollama",
-	"searxng":    "searxng",
-	"test":       "openclaw-test",
-	"prod":       "openclaw-prod",
+	"gateway":     "gateway",
+	"caddy":       "caddy",
+	"dev-sandbox": "dev-sandbox",
+	"ollama":      "ollama",
+	"searxng":     "searxng",
+	"test":        "openclaw-test",
+	"prod":        "openclaw-prod",
 }
 
 var secretScopes = map[string]struct{}{
@@ -121,16 +122,38 @@ type GatewayStatusResult struct {
 	DockerSocket  string `json:"docker_socket"`
 }
 
+type RepoSyncTargetResult struct {
+	Target          string `json:"target"`
+	RepoRoot        string `json:"repo_root,omitempty"`
+	Source          string `json:"source,omitempty"`
+	PreviousVersion string `json:"previous_version,omitempty"`
+	NewVersion      string `json:"new_version,omitempty"`
+	Changed         bool   `json:"changed"`
+}
+
+type RepoSyncResult struct {
+	OK      bool                   `json:"ok"`
+	Route   *Route                 `json:"route,omitempty"`
+	Summary string                 `json:"summary,omitempty"`
+	Command []string               `json:"command,omitempty"`
+	Targets []RepoSyncTargetResult `json:"targets,omitempty"`
+}
+
 type ServiceStatusResult struct {
-	OK             bool                     `json:"ok"`
-	Route          *Route                   `json:"route"`
-	Service        string                   `json:"service"`
-	ComposeProject string                   `json:"compose_project,omitempty"`
-	ContainerName  string                   `json:"container_name,omitempty"`
-	Image          string                   `json:"image,omitempty"`
-	Status         string                   `json:"status,omitempty"`
-	Running        bool                     `json:"running"`
-	Containers     []ServiceContainerStatus `json:"containers,omitempty"`
+	OK              bool                     `json:"ok"`
+	Route           *Route                   `json:"route"`
+	Service         string                   `json:"service"`
+	ServiceKind     string                   `json:"service_kind,omitempty"`
+	Present         bool                     `json:"present"`
+	ComposeProject  string                   `json:"compose_project,omitempty"`
+	ContainerName   string                   `json:"container_name,omitempty"`
+	Image           string                   `json:"image,omitempty"`
+	ArtifactVersion string                   `json:"artifact_version,omitempty"`
+	Status          string                   `json:"status,omitempty"`
+	Running         bool                     `json:"running"`
+	LogPath         string                   `json:"log_path,omitempty"`
+	MetadataPath    string                   `json:"metadata_path,omitempty"`
+	Containers      []ServiceContainerStatus `json:"containers,omitempty"`
 }
 
 type ServiceContainerStatus struct {
@@ -144,32 +167,43 @@ type ServiceContainerStatus struct {
 }
 
 type ServiceDeployResult struct {
-	OK             bool                     `json:"ok"`
-	Route          *Route                   `json:"route"`
-	Service        string                   `json:"service"`
-	ComposeProject string                   `json:"compose_project,omitempty"`
-	OutputDir      string                   `json:"output_dir,omitempty"`
-	Command        []string                 `json:"command,omitempty"`
-	Containers     []ServiceContainerStatus `json:"containers,omitempty"`
+	OK              bool                     `json:"ok"`
+	Route           *Route                   `json:"route"`
+	Service         string                   `json:"service"`
+	ServiceKind     string                   `json:"service_kind,omitempty"`
+	ComposeProject  string                   `json:"compose_project,omitempty"`
+	OutputDir       string                   `json:"output_dir,omitempty"`
+	ArtifactVersion string                   `json:"artifact_version,omitempty"`
+	LogPath         string                   `json:"log_path,omitempty"`
+	MetadataPath    string                   `json:"metadata_path,omitempty"`
+	Command         []string                 `json:"command,omitempty"`
+	Containers      []ServiceContainerStatus `json:"containers,omitempty"`
 }
 
 type ServiceActionResult struct {
-	OK         bool                     `json:"ok"`
-	Route      *Route                   `json:"route"`
-	Service    string                   `json:"service"`
-	Action     string                   `json:"action"`
-	Command    []string                 `json:"command,omitempty"`
-	Containers []ServiceContainerStatus `json:"containers,omitempty"`
+	OK              bool                     `json:"ok"`
+	Route           *Route                   `json:"route"`
+	Service         string                   `json:"service"`
+	ServiceKind     string                   `json:"service_kind,omitempty"`
+	Action          string                   `json:"action"`
+	ArtifactVersion string                   `json:"artifact_version,omitempty"`
+	LogPath         string                   `json:"log_path,omitempty"`
+	MetadataPath    string                   `json:"metadata_path,omitempty"`
+	Command         []string                 `json:"command,omitempty"`
+	Containers      []ServiceContainerStatus `json:"containers,omitempty"`
 }
 
 type ServiceListItem struct {
-	Service        string `json:"service"`
-	CanonicalName  string `json:"canonical_name,omitempty"`
-	ComposeProject string `json:"compose_project,omitempty"`
-	ContainerName  string `json:"container_name,omitempty"`
-	Status         string `json:"status,omitempty"`
-	Running        bool   `json:"running"`
-	Health         string `json:"health,omitempty"`
+	Service         string `json:"service"`
+	CanonicalName   string `json:"canonical_name,omitempty"`
+	ServiceKind     string `json:"service_kind,omitempty"`
+	Present         bool   `json:"present"`
+	ComposeProject  string `json:"compose_project,omitempty"`
+	ContainerName   string `json:"container_name,omitempty"`
+	ArtifactVersion string `json:"artifact_version,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Running         bool   `json:"running"`
+	Health          string `json:"health,omitempty"`
 }
 
 type ServiceListResult struct {
@@ -416,7 +450,7 @@ func parseGateway(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				"missing gateway command",
-				"use: gateway status|update|logs|mcp-stdio",
+				"use: gateway status|update|logs|repo-sync|mcp-stdio",
 			),
 			Code: ExitParseError,
 		}
@@ -440,6 +474,30 @@ func parseGateway(args []string) ParseResult {
 				Kind:     KindGateway,
 				Tokens:   append([]string(nil), args...),
 				Action:   args[1],
+			},
+		}
+	case "repo-sync":
+		if len(args) < 3 {
+			return ParseResult{
+				Envelope: Error(nil,
+					"parse_error",
+					"missing repo-sync target",
+					"use: gateway repo-sync services|runtime|all",
+				),
+				Code: ExitParseError,
+			}
+		}
+		targets, errEnvelope := normalizeRepoSyncTargets(args[2:])
+		if errEnvelope != nil {
+			return ParseResult{Envelope: errEnvelope, Code: ExitParseError}
+		}
+		return ParseResult{
+			Route: &Route{
+				Resource:   "gateway",
+				Kind:       KindGateway,
+				Tokens:     append([]string(nil), args...),
+				Action:     "repo-sync",
+				NativeArgs: targets,
 			},
 		}
 	case "mcp-stdio":
@@ -493,7 +551,7 @@ func parseGateway(args []string) ParseResult {
 			Envelope: Error(nil,
 				"parse_error",
 				fmt.Sprintf("unknown gateway command '%s'", args[1]),
-				"use: gateway status|update|logs|mcp-stdio",
+				"use: gateway status|update|logs|repo-sync|mcp-stdio",
 			),
 			Code: ExitParseError,
 		}
@@ -925,7 +983,7 @@ func validatePublicService(action, service string) *Envelope {
 		return Error(nil,
 			"parse_error",
 			fmt.Sprintf("unknown service '%s'", service),
-			"use one of: gateway, caddy, ollama, searxng, test, prod",
+			"use one of: gateway, caddy, dev-sandbox, ollama, searxng, test, prod",
 		)
 	}
 	if service == "gateway" && (action == "deploy" || action == "restart" || action == "remove") {
@@ -945,7 +1003,7 @@ func runtimeUsage(environment string) string {
 func verifyUsage(environment string) string {
 	switch environment {
 	case "test":
-		return "use: test verify runtime | test verify browser [url] | test verify web"
+		return "use: test verify runtime | test verify browser [url] | test verify web | test verify sandbox"
 	case "prod":
 		return "use: prod verify runtime"
 	default:
@@ -957,7 +1015,7 @@ func validateRuntimeVerifyTarget(environment, check string) *Envelope {
 	switch environment {
 	case "test":
 		switch check {
-		case "runtime", "browser", "web":
+		case "runtime", "browser", "web", "sandbox":
 			return nil
 		}
 		return Error(nil,
@@ -983,6 +1041,45 @@ func validateRuntimeVerifyTarget(environment, check string) *Envelope {
 	}
 }
 
+func normalizeRepoSyncTargets(values []string) ([]string, *Envelope) {
+	ordered := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		switch strings.TrimSpace(value) {
+		case "all":
+			values = []string{"services", "runtime"}
+			ordered = ordered[:0]
+			seen = map[string]struct{}{}
+		case "services", "runtime":
+		default:
+			return nil, Error(nil,
+				"parse_error",
+				fmt.Sprintf("unknown repo-sync target '%s'", value),
+				"use: gateway repo-sync services|runtime|all",
+			)
+		}
+	}
+	for _, value := range values {
+		target := strings.TrimSpace(value)
+		if target == "all" {
+			continue
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		ordered = append(ordered, target)
+	}
+	if len(ordered) == 0 {
+		return nil, Error(nil,
+			"parse_error",
+			"missing repo-sync target",
+			"use: gateway repo-sync services|runtime|all",
+		)
+	}
+	return ordered, nil
+}
+
 var helpTextByTopic = map[string]string{
 	"global": `
 moltbox <resource> <command>
@@ -995,6 +1092,7 @@ Resources:
     status
     update
     logs
+    repo-sync services|runtime|all
     mcp-stdio
 
   service
@@ -1034,6 +1132,7 @@ Commands:
   status
   update
   logs
+  repo-sync services|runtime|all
   mcp-stdio
 `,
 	"service": `
@@ -1050,6 +1149,7 @@ Commands:
 Services:
   gateway
   caddy
+  dev-sandbox
   ollama
   searxng
   test
@@ -1063,6 +1163,7 @@ Commands:
   verify runtime
   verify browser [url]
   verify web
+  verify sandbox
 `,
 	"prod": `
 moltbox prod <command>

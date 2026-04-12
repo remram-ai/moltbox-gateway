@@ -93,6 +93,57 @@ func TestResolveProdOperatorAllowsMutationHelpAndDryRun(t *testing.T) {
 	}
 }
 
+func TestResolveTestOperatorAllowsRepoSyncAndSandboxVerify(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "gateway repo-sync",
+			raw:  `moltbox gateway repo-sync services runtime`,
+			want: []string{"gateway", "repo-sync", "services", "runtime"},
+		},
+		{
+			name: "test verify sandbox",
+			raw:  `moltbox test verify sandbox`,
+			want: []string{"test", "verify", "sandbox"},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			args, deny, err := Resolve(ModeTestOperator, test.raw)
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if deny != "" {
+				t.Fatalf("Resolve() deny = %q, want empty", deny)
+			}
+			if !reflect.DeepEqual(args, test.want) {
+				t.Fatalf("Resolve() args = %#v, want %#v", args, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveTestOperatorRejectsDevSandboxRestart(t *testing.T) {
+	t.Parallel()
+
+	_, deny, err := Resolve(ModeTestOperator, `moltbox service restart dev-sandbox`)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if deny == "" {
+		t.Fatal("Resolve() deny = empty, want deny for dev-sandbox restart")
+	}
+}
+
 func TestResolveBootstrapPolicy(t *testing.T) {
 	t.Parallel()
 

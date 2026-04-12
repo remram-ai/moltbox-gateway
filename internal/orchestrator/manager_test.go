@@ -471,6 +471,361 @@ func TestDeployServiceRejectsGatewaySelfMutation(t *testing.T) {
 	}
 }
 
+func TestLoadServiceDefinitionForImageService(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\nactive_container_prefix: moltbox-dev-sandbox\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   filepath.Join(root, "state"),
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, nil)
+
+	definition, err := manager.LoadServiceDefinition("dev-sandbox")
+	if err != nil {
+		t.Fatalf("LoadServiceDefinition() error = %v", err)
+	}
+	if definition.Kind != serviceKindImage {
+		t.Fatalf("definition.Kind = %q, want %q", definition.Kind, serviceKindImage)
+	}
+	if definition.ImageName != "moltbox-dev-sandbox" {
+		t.Fatalf("definition.ImageName = %q, want moltbox-dev-sandbox", definition.ImageName)
+	}
+	if definition.ActiveContainerPrefix != "moltbox-dev-sandbox" {
+		t.Fatalf("definition.ActiveContainerPrefix = %q, want moltbox-dev-sandbox", definition.ActiveContainerPrefix)
+	}
+}
+
+func TestRenderServiceAssetsForImageServiceCopiesBuildContext(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	stateRoot := filepath.Join(root, "state")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "Dockerfile"), "FROM scratch\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "scripts", "verify.sh"), "#!/bin/sh\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, nil)
+
+	definition, err := manager.LoadServiceDefinition("dev-sandbox")
+	if err != nil {
+		t.Fatalf("LoadServiceDefinition() error = %v", err)
+	}
+	outputDir, commandArgs, err := manager.RenderServiceAssets("dev-sandbox", definition)
+	if err != nil {
+		t.Fatalf("RenderServiceAssets() error = %v", err)
+	}
+	if commandArgs != nil {
+		t.Fatalf("RenderServiceAssets() commandArgs = %#v, want nil for image service", commandArgs)
+	}
+	for _, relative := range []string{"Dockerfile", filepath.Join("scripts", "verify.sh")} {
+		if _, err := os.Stat(filepath.Join(outputDir, relative)); err != nil {
+			t.Fatalf("expected %s to exist in rendered image context: %v", relative, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "compose.yml")); !os.IsNotExist(err) {
+		t.Fatalf("compose.yml err = %v, want no compose for image service", err)
+	}
+}
+
+func TestDeployImageServiceBuildsAndRecordsMetadata(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	stateRoot := filepath.Join(root, "state")
+	logsRoot := filepath.Join(root, "logs")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\nactive_container_prefix: moltbox-dev-sandbox\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "Dockerfile"), "FROM scratch\n")
+
+	runner := &fakeRunner{
+		results: []command.Result{
+			{ExitCode: 0, Stdout: "build ok"},
+		},
+	}
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    logsRoot,
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, runner, nil)
+
+	result, err := manager.DeployService(context.Background(), &cli.Route{Resource: "service", Kind: cli.KindService, Action: "deploy", Subject: "dev-sandbox"}, "dev-sandbox")
+	if err != nil {
+		t.Fatalf("DeployService() error = %v", err)
+	}
+	if !result.OK || result.ServiceKind != serviceKindImage {
+		t.Fatalf("DeployService() result = %#v, want successful image service deploy", result)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("expected one docker build command, got %d", len(runner.commands))
+	}
+	if got := strings.Join(runner.commands[0], " "); !strings.Contains(got, "build") || !strings.Contains(got, "moltbox-dev-sandbox:latest") || !strings.Contains(got, "build-") {
+		t.Fatalf("docker build command = %q, want latest and immutable tags", got)
+	}
+
+	metadataBytes, err := os.ReadFile(filepath.Join(stateRoot, "services", "dev-sandbox", "image-build.json"))
+	if err != nil {
+		t.Fatalf("read image metadata: %v", err)
+	}
+	if !strings.Contains(string(metadataBytes), `"latest_tag": "moltbox-dev-sandbox:latest"`) {
+		t.Fatalf("image metadata = %s, want latest tag", metadataBytes)
+	}
+
+	logBytes, err := os.ReadFile(filepath.Join(logsRoot, "dev-sandbox", "build.log"))
+	if err != nil {
+		t.Fatalf("read build log: %v", err)
+	}
+	if !strings.Contains(string(logBytes), "build ok") {
+		t.Fatalf("build log = %q, want build output", string(logBytes))
+	}
+
+	history, err := deploystate.New(stateRoot).ReadDeploymentHistory()
+	if err != nil {
+		t.Fatalf("ReadDeploymentHistory() error = %v", err)
+	}
+	if len(history) != 1 || history[0].Target != "dev-sandbox" || history[0].Operation != "service_deploy" {
+		t.Fatalf("deployment history = %#v, want one dev-sandbox service_deploy record", history)
+	}
+}
+
+func TestImageServiceStatusReportsReadyState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	stateRoot := filepath.Join(root, "state")
+	logsRoot := filepath.Join(root, "logs")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\nactive_container_prefix: moltbox-dev-sandbox\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "Dockerfile"), "FROM scratch\n")
+	mustWriteFile(t, filepath.Join(stateRoot, "services", "dev-sandbox", "image-build.json"), "{\n  \"service\": \"dev-sandbox\",\n  \"image_name\": \"moltbox-dev-sandbox\",\n  \"latest_tag\": \"moltbox-dev-sandbox:latest\",\n  \"immutable_tag\": \"moltbox-dev-sandbox:build-123456789abc\"\n}\n")
+
+	runner := &fakeRunner{
+		results: []command.Result{
+			{ExitCode: 0, Stdout: "sha256:test"},
+			{ExitCode: 0, Stdout: "moltbox-dev-sandbox-run\tmoltbox-dev-sandbox:latest\tUp 5 seconds\n"},
+		},
+	}
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    logsRoot,
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, runner, nil)
+
+	status, err := manager.ServiceStatus(context.Background(), &cli.Route{Resource: "service", Kind: cli.KindService, Action: "status", Subject: "dev-sandbox"}, "dev-sandbox")
+	if err != nil {
+		t.Fatalf("ServiceStatus() error = %v", err)
+	}
+	if !status.Present || status.ServiceKind != serviceKindImage || status.Status != "ready" || !status.Running {
+		t.Fatalf("ServiceStatus() = %#v, want ready image service", status)
+	}
+	if status.ArtifactVersion != "moltbox-dev-sandbox:build-123456789abc" {
+		t.Fatalf("status.ArtifactVersion = %q, want immutable tag", status.ArtifactVersion)
+	}
+}
+
+func TestImageServiceLogsReadsBuildLog(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	logsRoot := filepath.Join(root, "logs")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\n")
+	mustWriteFile(t, filepath.Join(logsRoot, "dev-sandbox", "build.log"), "build ok\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   filepath.Join(root, "state"),
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    logsRoot,
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, nil)
+
+	result, err := manager.ServiceLogs(context.Background(), &cli.Route{Resource: "service", Kind: cli.KindService, Action: "logs", Subject: "dev-sandbox"}, "dev-sandbox")
+	if err != nil {
+		t.Fatalf("ServiceLogs() error = %v", err)
+	}
+	if !result.OK || !strings.Contains(result.Stdout, "build ok") {
+		t.Fatalf("ServiceLogs() = %#v, want image service log contents", result)
+	}
+}
+
+func TestRemoveImageServiceRemovesMetadataAndRecordsHistory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	stateRoot := filepath.Join(root, "state")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\n")
+	mustWriteFile(t, filepath.Join(stateRoot, "services", "dev-sandbox", "image-build.json"), "{\n  \"service\": \"dev-sandbox\",\n  \"image_name\": \"moltbox-dev-sandbox\",\n  \"latest_tag\": \"moltbox-dev-sandbox:latest\",\n  \"immutable_tag\": \"moltbox-dev-sandbox:build-123456789abc\"\n}\n")
+
+	runner := &fakeRunner{
+		results: []command.Result{
+			{ExitCode: 0, Stdout: "removed"},
+		},
+	}
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, runner, nil)
+
+	result, err := manager.RemoveService(context.Background(), &cli.Route{Resource: "service", Kind: cli.KindService, Action: "remove", Subject: "dev-sandbox"}, "dev-sandbox")
+	if err != nil {
+		t.Fatalf("RemoveService() error = %v", err)
+	}
+	if !result.OK || result.ServiceKind != serviceKindImage {
+		t.Fatalf("RemoveService() = %#v, want successful image-service removal", result)
+	}
+	if _, err := os.Stat(filepath.Join(stateRoot, "services", "dev-sandbox", "image-build.json")); !os.IsNotExist(err) {
+		t.Fatalf("image-build.json err = %v, want removed", err)
+	}
+
+	history, err := deploystate.New(stateRoot).ReadDeploymentHistory()
+	if err != nil {
+		t.Fatalf("ReadDeploymentHistory() error = %v", err)
+	}
+	if len(history) != 1 || history[0].Operation != "service_remove" {
+		t.Fatalf("deployment history = %#v, want one service_remove record", history)
+	}
+}
+
+func TestRestartImageServiceIsExplicitlyUnsupported(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   filepath.Join(root, "state"),
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, nil)
+
+	_, err := manager.RestartService(context.Background(), &cli.Route{Resource: "service", Kind: cli.KindService, Action: "restart", Subject: "dev-sandbox"}, "dev-sandbox")
+	if err == nil {
+		t.Fatal("expected restart of image-backed service to fail")
+	}
+	if !strings.Contains(err.Error(), "not supported for image-backed services") {
+		t.Fatalf("error = %v, want explicit image-backed restart guidance", err)
+	}
+}
+
+func TestGatewayRepoSyncRunsHelperAndRecordsHistory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state")
+	servicesRoot := filepath.Join(root, "services-repo")
+	runtimeRoot := filepath.Join(root, "runtime-repo")
+
+	runner := &fakeRunner{
+		results: []command.Result{
+			{ExitCode: 0, Stdout: "services\t" + servicesRoot + "\tgit@github.com:remram-ai/moltbox-services.git\told-services\tnew-services\ttrue\nruntime\t" + runtimeRoot + "\tgit@github.com:remram-ai/moltbox-runtime.git\told-runtime\tnew-runtime\ttrue\n"},
+		},
+	}
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: filepath.Join(root, "runtime-state"),
+			LogsRoot:    filepath.Join(root, "logs"),
+			SecretsRoot: filepath.Join(root, "secrets"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, runner, nil)
+
+	result, err := manager.GatewayRepoSync(context.Background(), &cli.Route{Resource: "gateway", Kind: cli.KindGateway, Action: "repo-sync", NativeArgs: []string{"services", "runtime"}})
+	if err != nil {
+		t.Fatalf("GatewayRepoSync() error = %v", err)
+	}
+	if !result.OK || len(result.Targets) != 2 {
+		t.Fatalf("GatewayRepoSync() = %#v, want two synced targets", result)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("expected one helper command, got %d", len(runner.commands))
+	}
+	got := strings.Join(runner.commands[0], " ")
+	if !strings.Contains(got, "moltbox-gateway:latest") || !strings.Contains(got, "git -C \"$REPO\" fetch --all --tags --prune") || !strings.Contains(got, "git -C \"$REPO\" pull --ff-only") {
+		t.Fatalf("repo-sync helper command = %q, want git fetch/pull helper", got)
+	}
+
+	history, err := deploystate.New(stateRoot).ReadDeploymentHistory()
+	if err != nil {
+		t.Fatalf("ReadDeploymentHistory() error = %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("deployment history length = %d, want 2", len(history))
+	}
+	for _, record := range history {
+		if record.Operation != "gateway_repo_sync" {
+			t.Fatalf("deployment record = %#v, want gateway_repo_sync", record)
+		}
+	}
+}
+
 func TestRuntimeOpenClawMutationKindIgnoresHelpAndDryRun(t *testing.T) {
 	t.Parallel()
 

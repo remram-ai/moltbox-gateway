@@ -57,6 +57,32 @@ func TestCLIForwardsLightweightPublicSurface(t *testing.T) {
 			},
 		},
 		{
+			name:       "gateway repo-sync",
+			args:       []string{"gateway", "repo-sync", "services", "runtime"},
+			wantMethod: http.MethodPost,
+			wantPath:   "/repo-sync",
+			wantCode:   cli.ExitOK,
+			handler: func(t *testing.T, writer http.ResponseWriter, request *http.Request) {
+				t.Helper()
+				var payload cli.RouteRequest
+				if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if payload.Route == nil || payload.Route.Action != "repo-sync" || !equalStrings(payload.Route.NativeArgs, []string{"services", "runtime"}) {
+					t.Fatalf("payload.route = %#v, want gateway repo-sync route", payload.Route)
+				}
+				_ = json.NewEncoder(writer).Encode(cli.RepoSyncResult{
+					OK:      true,
+					Route:   payload.Route,
+					Summary: "repo-sync completed",
+					Targets: []cli.RepoSyncTargetResult{
+						{Target: "services", PreviousVersion: "old", NewVersion: "new", Changed: true},
+						{Target: "runtime", PreviousVersion: "old", NewVersion: "new", Changed: true},
+					},
+				})
+			},
+		},
+		{
 			name:       "service list",
 			args:       []string{"service", "list"},
 			wantMethod: http.MethodGet,
@@ -685,6 +711,47 @@ func TestSSHWrapperModeTestOperatorAllowsVerifyBrowser(t *testing.T) {
 	code := run([]string{
 		"__ssh-wrapper=test-operator",
 		`moltbox test verify browser https://example.com`,
+	}, &stdout, ioDiscard{})
+	if code != cli.ExitOK {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)
+	}
+}
+
+func TestSSHWrapperModeTestOperatorAllowsGatewayRepoSync(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", request.Method)
+		}
+		if request.URL.Path != "/repo-sync" {
+			t.Fatalf("path = %s, want /repo-sync", request.URL.Path)
+		}
+
+		var payload cli.RouteRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.Route == nil || payload.Route.Action != "repo-sync" || !equalStrings(payload.Route.NativeArgs, []string{"services", "runtime"}) {
+			t.Fatalf("payload.route = %#v, want repo-sync route", payload.Route)
+		}
+
+		_ = json.NewEncoder(writer).Encode(cli.RepoSyncResult{
+			OK:      true,
+			Route:   payload.Route,
+			Summary: "repo-sync completed",
+			Targets: []cli.RepoSyncTargetResult{
+				{Target: "services", PreviousVersion: "old", NewVersion: "new", Changed: true},
+				{Target: "runtime", PreviousVersion: "old", NewVersion: "new", Changed: true},
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("MOLTBOX_GATEWAY_URL", server.URL)
+
+	var stdout strings.Builder
+	code := run([]string{
+		"__ssh-wrapper=test-operator",
+		`moltbox gateway repo-sync services runtime`,
 	}, &stdout, ioDiscard{})
 	if code != cli.ExitOK {
 		t.Fatalf("exit code = %d, want %d", code, cli.ExitOK)

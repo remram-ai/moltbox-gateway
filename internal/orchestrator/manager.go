@@ -48,16 +48,20 @@ type Manager struct {
 }
 
 type ServiceDefinition struct {
-	ComposeProject  string
-	ContainerNames  []string
-	RuntimeRequired bool
-	BuildOnDeploy   bool
-	SkipPull        bool
+	Kind                  string
+	ComposeProject        string
+	ContainerNames        []string
+	RuntimeRequired       bool
+	BuildOnDeploy         bool
+	SkipPull              bool
+	ImageName             string
+	ActiveContainerPrefix string
 }
 
 var managedPublicServices = []string{
 	"gateway",
 	"caddy",
+	"dev-sandbox",
 	"ollama",
 	"searxng",
 	"test",
@@ -87,6 +91,9 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 	definition, err := m.LoadServiceDefinition(canonicalService)
 	if err != nil {
 		return cli.ServiceDeployResult{}, err
+	}
+	if isImageServiceDefinition(definition) {
+		return m.deployImageService(ctx, route, canonicalService, definition)
 	}
 
 	action := "deploy"
@@ -146,13 +153,15 @@ func (m *Manager) DeployService(ctx context.Context, route *cli.Route, service s
 	}
 
 	return cli.ServiceDeployResult{
-		OK:             true,
-		Route:          route,
-		Service:        service,
-		ComposeProject: definition.ComposeProject,
-		OutputDir:      outputDir,
-		Command:        append([]string{"docker"}, commandArgs...),
-		Containers:     containers,
+		OK:              true,
+		Route:           route,
+		Service:         service,
+		ServiceKind:     serviceKindCompose,
+		ComposeProject:  definition.ComposeProject,
+		OutputDir:       outputDir,
+		ArtifactVersion: m.currentServiceArtifactVersion(canonicalService, containers),
+		Command:         append([]string{"docker"}, commandArgs...),
+		Containers:      containers,
 	}, nil
 }
 
@@ -554,6 +563,9 @@ func (m *Manager) RestartService(ctx context.Context, route *cli.Route, service 
 	if err != nil {
 		return cli.ServiceActionResult{}, err
 	}
+	if isImageServiceDefinition(definition) {
+		return cli.ServiceActionResult{}, fmt.Errorf("service restart %s is not supported for image-backed services", canonicalService)
+	}
 
 	snapshotRecord, err := m.snapshotServiceState(ctx, route.Action, canonicalService)
 	if err != nil {
@@ -585,12 +597,14 @@ func (m *Manager) RestartService(ctx context.Context, route *cli.Route, service 
 	}
 
 	return cli.ServiceActionResult{
-		OK:         true,
-		Route:      route,
-		Service:    canonicalService,
-		Action:     route.Action,
-		Command:    []string{"docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "restart"},
-		Containers: containers,
+		OK:              true,
+		Route:           route,
+		Service:         canonicalService,
+		ServiceKind:     serviceKindCompose,
+		Action:          route.Action,
+		ArtifactVersion: m.currentServiceArtifactVersion(canonicalService, containers),
+		Command:         []string{"docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "restart"},
+		Containers:      containers,
 	}, nil
 }
 
@@ -603,6 +617,9 @@ func (m *Manager) RemoveService(ctx context.Context, route *cli.Route, service s
 	definition, err := m.LoadServiceDefinition(canonicalService)
 	if err != nil {
 		return cli.ServiceActionResult{}, err
+	}
+	if isImageServiceDefinition(definition) {
+		return m.removeImageService(ctx, route, canonicalService, definition)
 	}
 	outputDir := ""
 
@@ -638,12 +655,14 @@ func (m *Manager) RemoveService(ctx context.Context, route *cli.Route, service s
 	}
 
 	return cli.ServiceActionResult{
-		OK:         true,
-		Route:      route,
-		Service:    canonicalService,
-		Action:     route.Action,
-		Command:    []string{"docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "down", "--remove-orphans"},
-		Containers: containers,
+		OK:              true,
+		Route:           route,
+		Service:         canonicalService,
+		ServiceKind:     serviceKindCompose,
+		Action:          route.Action,
+		ArtifactVersion: m.currentServiceArtifactVersion(canonicalService, containers),
+		Command:         []string{"docker", "compose", "-f", filepath.Join(outputDir, "compose.yml"), "-p", definition.ComposeProject, "down", "--remove-orphans"},
+		Containers:      containers,
 	}, nil
 }
 
@@ -662,12 +681,15 @@ func (m *Manager) ServiceList(ctx context.Context, route *cli.Route) (cli.Servic
 		}
 
 		item := cli.ServiceListItem{
-			Service:        service,
-			CanonicalName:  canonicalServiceName(service),
-			ComposeProject: status.ComposeProject,
-			ContainerName:  status.ContainerName,
-			Status:         status.Status,
-			Running:        status.Running,
+			Service:         service,
+			CanonicalName:   canonicalServiceName(service),
+			ServiceKind:     status.ServiceKind,
+			Present:         status.Present,
+			ComposeProject:  status.ComposeProject,
+			ContainerName:   status.ContainerName,
+			ArtifactVersion: status.ArtifactVersion,
+			Status:          status.Status,
+			Running:         status.Running,
 		}
 		if len(status.Containers) > 0 {
 			item.Health = status.Containers[0].Health
@@ -688,6 +710,9 @@ func (m *Manager) ServiceStatus(ctx context.Context, route *cli.Route, service s
 	if err != nil {
 		return cli.ServiceStatusResult{}, err
 	}
+	if isImageServiceDefinition(definition) {
+		return m.imageServiceStatus(ctx, route, service, definition)
+	}
 
 	containers, err := m.inspectContainers(ctx, definition.ContainerNames)
 	if err != nil {
@@ -698,12 +723,20 @@ func (m *Manager) ServiceStatus(ctx context.Context, route *cli.Route, service s
 		OK:             true,
 		Route:          route,
 		Service:        service,
+		ServiceKind:    serviceKindCompose,
 		ComposeProject: definition.ComposeProject,
 		Containers:     containers,
+	}
+	for _, container := range containers {
+		if container.Present {
+			result.Present = true
+			break
+		}
 	}
 	if len(containers) > 0 {
 		result.ContainerName = containers[0].ContainerName
 		result.Image = containers[0].Image
+		result.ArtifactVersion = containers[0].Image
 		result.Status = containers[0].Status
 		result.Running = containers[0].Running
 	}
@@ -715,6 +748,9 @@ func (m *Manager) ServiceLogs(ctx context.Context, route *cli.Route, service str
 	definition, err := m.LoadServiceDefinition(canonicalService)
 	if err != nil {
 		return cli.CommandResult{}, err
+	}
+	if isImageServiceDefinition(definition) {
+		return m.imageServiceLogs(ctx, route, canonicalService, definition)
 	}
 	if len(definition.ContainerNames) == 0 {
 		return cli.CommandResult{}, fmt.Errorf("service %s has no containers", service)
@@ -879,6 +915,8 @@ func (m *Manager) LoadServiceDefinition(service string) (ServiceDefinition, erro
 			continue
 		}
 		switch key {
+		case "kind":
+			definition.Kind = value
 		case "compose_project":
 			definition.ComposeProject = value
 		case "runtime_required":
@@ -887,11 +925,24 @@ func (m *Manager) LoadServiceDefinition(service string) (ServiceDefinition, erro
 			definition.BuildOnDeploy = parseBool(value)
 		case "skip_pull":
 			definition.SkipPull = parseBool(value)
+		case "image_name":
+			definition.ImageName = value
+		case "active_container_prefix":
+			definition.ActiveContainerPrefix = value
 		}
 	}
 
+	if strings.TrimSpace(definition.Kind) == "" {
+		definition.Kind = serviceKindCompose
+	}
 	if definition.ComposeProject == "" {
 		return ServiceDefinition{}, fmt.Errorf("service %s is missing compose_project", service)
+	}
+	if definition.Kind == serviceKindImage {
+		if strings.TrimSpace(definition.ImageName) == "" {
+			return ServiceDefinition{}, fmt.Errorf("service %s is missing image_name", service)
+		}
+		return definition, nil
 	}
 	if len(definition.ContainerNames) == 0 {
 		return ServiceDefinition{}, fmt.Errorf("service %s is missing container_names", service)
@@ -913,6 +964,9 @@ func (m *Manager) RenderServiceAssets(service string, definition ServiceDefiniti
 	}
 	if err := m.renderConfigAssets(service, outputDir); err != nil {
 		return "", nil, err
+	}
+	if isImageServiceDefinition(definition) {
+		return outputDir, nil, nil
 	}
 	if err := m.renderCompose(service, definition, serviceRoot, outputDir); err != nil {
 		return "", nil, err
@@ -1214,6 +1268,16 @@ func (m *Manager) inspectContainers(ctx context.Context, names []string) ([]cli.
 
 func (m *Manager) ensureRenderedServiceState(service string, definition ServiceDefinition) (string, error) {
 	outputDir := m.config.ServiceStateDir(service)
+	if isImageServiceDefinition(definition) {
+		if _, err := os.Stat(outputDir); err == nil {
+			return outputDir, nil
+		}
+		renderedDir, _, err := m.RenderServiceAssets(service, definition)
+		if err != nil {
+			return "", err
+		}
+		return renderedDir, nil
+	}
 	if _, err := os.Stat(filepath.Join(outputDir, "compose.yml")); err == nil {
 		return outputDir, nil
 	}

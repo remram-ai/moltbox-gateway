@@ -72,8 +72,13 @@ func applyTestOperatorPolicy(args []string) ([]string, string, error) {
 				switch args[2] {
 				case "test", "ollama", "searxng":
 					return args, "", nil
+				case "dev-sandbox":
+					if args[1] == "restart" {
+						return nil, "test operator mutation for dev-sandbox is limited to deploy and remove", nil
+					}
+					return args, "", nil
 				}
-				return nil, "test operator mutation is limited to test, ollama, and searxng", nil
+				return nil, "test operator mutation is limited to test, ollama, searxng, and dev-sandbox", nil
 			}
 		}
 		return nil, "service access is limited to list, status, logs, and test-lane mutation targets", nil
@@ -81,7 +86,17 @@ func applyTestOperatorPolicy(args []string) ([]string, string, error) {
 		if len(args) == 2 && (args[1] == "status" || args[1] == "logs" || args[1] == "mcp-stdio") {
 			return args, "", nil
 		}
-		return nil, "gateway access is limited to status, logs, and mcp-stdio", nil
+		if len(args) >= 3 && args[1] == "repo-sync" {
+			for _, target := range args[2:] {
+				switch target {
+				case "services", "runtime", "all":
+				default:
+					return nil, "gateway repo-sync is limited to services, runtime, or all", nil
+				}
+			}
+			return args, "", nil
+		}
+		return nil, "gateway access is limited to status, logs, repo-sync, and mcp-stdio", nil
 	case "test":
 		if len(args) >= 3 {
 			if args[1] == "openclaw" {
@@ -89,12 +104,12 @@ func applyTestOperatorPolicy(args []string) ([]string, string, error) {
 			}
 			if args[1] == "verify" {
 				switch args[2] {
-				case "runtime", "browser", "web":
+				case "runtime", "browser", "web", "sandbox":
 					return args, "", nil
 				}
 			}
 		}
-		return nil, "test operator access is limited to native test OpenClaw commands and verify runtime|browser|web", nil
+		return nil, "test operator access is limited to native test OpenClaw commands and verify runtime|browser|web|sandbox", nil
 	case "ollama":
 		if len(args) >= 2 {
 			switch args[1] {

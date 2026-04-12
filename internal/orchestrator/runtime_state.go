@@ -1552,6 +1552,9 @@ func (m *Manager) recordServiceDeployment(route *cli.Route, service string, cont
 }
 
 func (m *Manager) currentServiceArtifactVersion(service string, containers []cli.ServiceContainerStatus) string {
+	if definition, err := m.LoadServiceDefinition(service); err == nil && isImageServiceDefinition(definition) {
+		return m.currentImageServiceArtifactVersion(service, definition)
+	}
 	if isRuntimeService(service) {
 		return serviceArtifactVersion(service, m.selectedRuntimeImage(service))
 	}

@@ -67,6 +67,13 @@ func TestParseServiceContract(t *testing.T) {
 			wantSubject: "searxng",
 		},
 		{
+			name:        "service deploy dev-sandbox",
+			args:        []string{"service", "deploy", "dev-sandbox"},
+			wantKind:    KindService,
+			wantAction:  "deploy",
+			wantSubject: "dev-sandbox",
+		},
+		{
 			name:        "service restart",
 			args:        []string{"service", "restart", "caddy"},
 			wantKind:    KindService,
@@ -102,6 +109,29 @@ func TestParseServiceContract(t *testing.T) {
 				t.Fatalf("Parse() route = %#v", result.Route)
 			}
 		})
+	}
+}
+
+func TestParseGatewayRepoSync(t *testing.T) {
+	t.Parallel()
+
+	result := Parse([]string{"gateway", "repo-sync", "services", "runtime"})
+	if result.Route == nil {
+		t.Fatal("Parse() route = nil")
+	}
+	if result.Route.Kind != KindGateway || result.Route.Action != "repo-sync" {
+		t.Fatalf("Parse() route = %#v, want gateway repo-sync route", result.Route)
+	}
+	if !equalArgs(result.Route.NativeArgs, []string{"services", "runtime"}) {
+		t.Fatalf("Parse() native_args = %#v, want services runtime", result.Route.NativeArgs)
+	}
+
+	all := Parse([]string{"gateway", "repo-sync", "all"})
+	if all.Route == nil {
+		t.Fatal("Parse(all) route = nil")
+	}
+	if !equalArgs(all.Route.NativeArgs, []string{"services", "runtime"}) {
+		t.Fatalf("Parse(all) native_args = %#v, want services runtime", all.Route.NativeArgs)
 	}
 }
 
@@ -172,6 +202,13 @@ func TestParseRuntimeVerifyAcrossEnvironments(t *testing.T) {
 			wantRuntime: "openclaw-test",
 			wantCheck:   "browser",
 			wantArgs:    []string{"https://example.com"},
+		},
+		{
+			name:        "test verify sandbox",
+			args:        []string{"test", "verify", "sandbox"},
+			wantEnv:     "test",
+			wantRuntime: "openclaw-test",
+			wantCheck:   "sandbox",
 		},
 		{
 			name:        "prod verify runtime",
@@ -330,7 +367,7 @@ func TestWriteHelpServiceListsCurrentServices(t *testing.T) {
 	}
 
 	text := out.String()
-	for _, needle := range []string{"gateway", "caddy", "ollama", "searxng", "test", "prod"} {
+	for _, needle := range []string{"gateway", "caddy", "dev-sandbox", "ollama", "searxng", "test", "prod"} {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("service help missing %q in %q", needle, text)
 		}
@@ -354,6 +391,7 @@ func TestWriteHelpGlobalDocumentsLightweightSurface(t *testing.T) {
 		"ollama",
 		"secret",
 		"verify <check>",
+		"repo-sync services|runtime|all",
 		"gateway docker",
 		"gateway service",
 	} {
@@ -377,6 +415,9 @@ func TestWriteHelpRuntimeTopicsDocumentVerify(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), "verify") {
 				t.Fatalf("%s help missing verify surface in %q", topic, out.String())
+			}
+			if topic == "test" && !strings.Contains(out.String(), "verify sandbox") {
+				t.Fatalf("%s help missing sandbox verify surface in %q", topic, out.String())
 			}
 		})
 	}
