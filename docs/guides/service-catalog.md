@@ -17,6 +17,7 @@ Use:
 | `caddy` | `caddy` | ingress and TLS | fronts `moltbox-gateway`, `moltbox-test`, and `moltbox-prod` |
 | `ollama` | `ollama` | local model serving | primary local model backend |
 | `searxng` | `searxng` | local search backend | backs `web_search` |
+| `dev-sandbox` | image-backed | coding sandbox image/service | deployable through `moltbox service deploy dev-sandbox`; `restart` is intentionally unsupported |
 | `test` | `openclaw-test` | proving runtime | first lane for baseline and runtime changes |
 | `prod` | `openclaw-prod` | protected runtime | managed pet |
 
@@ -55,13 +56,26 @@ All services are managed through the service plane:
 - `moltbox service restart <service>`
 - `moltbox service remove <service>`
 - `moltbox service logs <service>`
+- `moltbox gateway repo-sync services|runtime|all`
 
 Examples:
 
+- `moltbox gateway repo-sync services runtime`
+- `moltbox service deploy dev-sandbox`
 - `moltbox service deploy searxng`
 - `moltbox service deploy test`
 - `moltbox service status prod`
 - `moltbox service logs gateway`
+
+Sandbox acceptance flow:
+
+1. `moltbox service deploy dev-sandbox`
+2. `moltbox service deploy test`
+3. `moltbox test verify sandbox`
+
+`dev-sandbox` is intentionally image-backed. The real work happens in ephemeral
+sibling sandbox containers launched for the `coder` agent, not in a long-lived
+toolbox daemon container.
 
 ## Mutation And Recovery Boundary
 

@@ -10,6 +10,7 @@ The managed appliance services are:
 - `caddy`
 - `ollama`
 - `searxng`
+- `dev-sandbox`
 - `test`
 - `prod`
 
@@ -20,10 +21,10 @@ Public service names `test` and `prod` map to `openclaw-test` and `openclaw-prod
 ```text
 moltbox
   bootstrap gateway
-  gateway status|logs|update|mcp-stdio
+  gateway status|logs|update|repo-sync services|runtime|all|mcp-stdio
   service list|status|deploy|restart|remove|logs <service>
   test openclaw <native args>
-  test verify runtime|browser|web
+  test verify runtime|browser|web|sandbox
   prod openclaw <native args>
   prod verify runtime
   ollama <native args>
@@ -37,14 +38,17 @@ Use this contract for normal operations. Do not use raw Docker as the normal pat
 Inspect the appliance:
 
 - `moltbox gateway status`
+- `moltbox gateway repo-sync services runtime`
 - `moltbox service list`
 - `moltbox service status gateway`
+- `moltbox service status dev-sandbox`
 - `moltbox service status test`
 - `moltbox service status prod`
 
 Mutate the service plane:
 
 - `moltbox service deploy searxng`
+- `moltbox service deploy dev-sandbox`
 - `moltbox service deploy test`
 - `moltbox service restart caddy`
 - `moltbox service remove <legacy-service>`
@@ -66,6 +70,7 @@ Run operator-grade verification on `test`:
 
 - `moltbox test verify runtime`
 - `moltbox test verify web`
+- `moltbox test verify sandbox`
 
 Use native OpenClaw CLI on `prod`:
 
@@ -111,19 +116,14 @@ Checkpoint and replay are not the normal recovery story.
 
 ## SSH Role Model
 
-Human admin:
-
-- retained for trusted administration
-- current host account: `jpekovitch`
-- current SSH aliases: `moltbox`, `moltbox-admin`
-
 AI test operator:
 
 - forced-command SSH
 - current host account: `moltbox-ai-test`
 - current SSH alias: `moltbox-ai-test`
 - CLI-driven mutation on `test`
-- limited service-plane mutation for `test`, `ollama`, and `searxng`
+- service-plane mutation for `dev-sandbox` and the test-lane dependencies
+- repo promotion through `moltbox gateway repo-sync services|runtime|all`
 - routine verification through `moltbox test verify ...`
 
 AI prod operator:
@@ -141,6 +141,8 @@ Break-glass admin:
 - current host account: `moltbox-breakglass`
 - current SSH alias: `moltbox-breakglass`
 - current live behavior: full shell plus passwordless `sudo`
+- use this lane for one-into-admin recovery or bootstrap operations such as
+  the initial `moltbox gateway update` that exposes new restricted CLI surfaces
 
 ## SSH Key Discovery
 
@@ -150,7 +152,6 @@ On the current operator workstation, the active key path for all of the accounts
 
 Current live host state uses that one key for:
 
-- `jpekovitch`
 - `moltbox-ai-test`
 - `moltbox-ai-prod`
 - `moltbox-breakglass`
@@ -161,6 +162,22 @@ Legacy local keys:
 - `C:\Users\Jason\.ssh\codex-bootstrap`
 
 Those legacy key names are not the current installed host keys and should not be treated as the current account names or the current onboarding path.
+
+## Sandbox Rollout
+
+For the sandboxed coding lane, the normal operator sequence is:
+
+1. `ssh moltbox-breakglass 'moltbox gateway update'`
+2. `ssh moltbox-ai-test 'moltbox gateway repo-sync services runtime'`
+3. `ssh moltbox-ai-test 'moltbox service deploy dev-sandbox'`
+4. `ssh moltbox-ai-test 'moltbox service deploy test'`
+5. `ssh moltbox-ai-test 'moltbox test verify sandbox'`
+
+Promotion rule:
+
+- keep `test` as the acceptance lane
+- prepare matching `prod` templates in source
+- do not deploy `prod` sandbox changes without an explicit promotion step
 
 ## Web Capability
 

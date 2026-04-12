@@ -7,10 +7,10 @@ Public CLI:
 ```text
 moltbox
   bootstrap gateway
-  gateway status|logs|update|mcp-stdio
+  gateway status|logs|update|repo-sync services|runtime|all|mcp-stdio
   service list|status|deploy|restart|remove|logs <service>
   test openclaw <native args>
-  test verify runtime|browser|web
+  test verify runtime|browser|web|sandbox
   prod openclaw <native args>
   prod verify runtime
   ollama <native args>
@@ -23,6 +23,7 @@ Current public service names:
 - `caddy`
 - `ollama`
 - `searxng`
+- `dev-sandbox`
 - `test`
 - `prod`
 
@@ -31,6 +32,7 @@ Gateway role:
 - service-plane manager
 - snapshot guardrail owner
 - gateway update owner
+- repo promotion owner for `moltbox-services` and `moltbox-runtime`
 - secret owner
 - SSH role policy owner
 - owner of routine operator verification surfaces

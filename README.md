@@ -66,10 +66,10 @@ Public CLI:
 ```text
 moltbox
   bootstrap gateway
-  gateway status|logs|update|mcp-stdio
+  gateway status|logs|update|repo-sync services|runtime|all|mcp-stdio
   service list|status|deploy|restart|remove|logs <service>
   test openclaw <native args>
-  test verify runtime|browser|web
+  test verify runtime|browser|web|sandbox
   prod openclaw <native args>
   prod verify runtime
   ollama <native args>
@@ -82,6 +82,7 @@ Current managed services:
 - `caddy`
 - `ollama`
 - `searxng`
+- `dev-sandbox`
 - `test`
 - `prod`
 
@@ -98,8 +99,10 @@ Runtime service mapping:
 Core operating model:
 
 - `test` and `prod` are managed-pet OpenClaw runtimes
+- `dev-sandbox` is an image-backed service that supplies the sibling Docker sandbox image used by the non-default `coder` agent path
 - normal runtime mutation happens through native `openclaw` CLI surfaces
 - routine runtime verification happens through `moltbox test verify ...` and `moltbox prod verify runtime`
+- routine repo promotion for service/runtime source happens through `moltbox gateway repo-sync services|runtime|all`
 - replay and checkpoint are not part of the normal `test` / `prod` lifecycle
 - service deploy, service restart, and mutating native runtime commands are snapshot-guarded
 - ZFS snapshots are the first restore-point mechanism

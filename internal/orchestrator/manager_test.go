@@ -196,6 +196,84 @@ func TestRenderServiceAssetsForOpenClawTestSandboxedCoder(t *testing.T) {
 	}
 }
 
+func TestRenderServiceAssetsForOpenClawProdSandboxParity(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	runtimeRoot := filepath.Join(root, "runtime-repo")
+	stateRoot := filepath.Join(root, "state")
+	runtimeStateRoot := filepath.Join(root, "runtime-state")
+
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-prod", "service.yaml"), "compose_project: openclaw-prod\ncontainer_names:\n  - openclaw-prod\nruntime_required: true\n")
+	mustWriteFile(t, filepath.Join(servicesRoot, "services", "openclaw-prod", "compose.yml.template"), "services:\n  {{ service_name }}:\n    container_name: \"{{ container_name }}\"\n    volumes:\n      - \"{{ runtime_component_dir }}:/home/node/.openclaw\"\n      - \"{{ runtime_component_dir }}:{{ runtime_component_dir }}\"\n      - \"/var/run/docker.sock:/var/run/docker.sock\"\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "openclaw-prod", "openclaw.json.template"), "{\n  \"diagnostics\": {\n    \"enabled\": false\n  },\n  \"logging\": {\n    \"consoleLevel\": \"warn\"\n  },\n  \"agents\": {\n    \"defaults\": {\n      \"workspace\": \"{{ runtime_component_dir }}/workspace\"\n    },\n    \"list\": [\n      {\n        \"id\": \"main\",\n        \"default\": true,\n        \"workspace\": \"{{ runtime_component_dir }}/workspace\",\n        \"sandbox\": {\n          \"mode\": \"off\"\n        },\n        \"tools\": {\n          \"allow\": [\n            \"web_search\",\n            \"web_fetch\"\n          ]\n        }\n      },\n      {\n        \"id\": \"coder\",\n        \"workspace\": \"{{ runtime_component_dir }}/workspace\",\n        \"tools\": {\n          \"profile\": \"coding\",\n          \"exec\": {\n            \"host\": \"sandbox\",\n            \"security\": \"full\",\n            \"ask\": \"off\"\n          }\n        },\n        \"sandbox\": {\n          \"mode\": \"all\",\n          \"scope\": \"agent\",\n          \"workspaceAccess\": \"rw\",\n          \"docker\": {\n            \"image\": \"moltbox-dev-sandbox:latest\",\n            \"containerPrefix\": \"moltbox-dev-sandbox-{{ service_name }}-\",\n            \"workdir\": \"/workspace\",\n            \"readOnlyRoot\": true,\n            \"network\": \"none\",\n            \"user\": \"10001:10001\",\n            \"capDrop\": [\n              \"ALL\"\n            ]\n          }\n        }\n      }\n    ]\n  },\n  \"tools\": {\n    \"web\": {\n      \"search\": {\n        \"enabled\": true\n      }\n    }\n  }\n}\n")
+
+	manager := NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   stateRoot,
+			RuntimeRoot: runtimeStateRoot,
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
+	}, fakeInspector{}, &fakeRunner{}, nil)
+
+	definition, err := manager.LoadServiceDefinition("openclaw-prod")
+	if err != nil {
+		t.Fatalf("LoadServiceDefinition() error = %v", err)
+	}
+
+	outputDir, _, err := manager.RenderServiceAssets("openclaw-prod", definition)
+	if err != nil {
+		t.Fatalf("RenderServiceAssets() error = %v", err)
+	}
+
+	composeData, err := os.ReadFile(filepath.Join(outputDir, "compose.yml"))
+	if err != nil {
+		t.Fatalf("read compose: %v", err)
+	}
+	expectedRuntimeRoot := filepath.Join(runtimeStateRoot, "openclaw-prod")
+	for _, fragment := range []string{
+		expectedRuntimeRoot + ":/home/node/.openclaw",
+		expectedRuntimeRoot + ":" + expectedRuntimeRoot,
+		"/var/run/docker.sock:/var/run/docker.sock",
+	} {
+		if !strings.Contains(string(composeData), fragment) {
+			t.Fatalf("compose missing %q: %s", fragment, composeData)
+		}
+	}
+
+	openclawData, err := os.ReadFile(filepath.Join(outputDir, "config", "openclaw-prod", "openclaw.json"))
+	if err != nil {
+		t.Fatalf("read openclaw.json: %v", err)
+	}
+	for _, fragment := range []string{
+		"\"consoleLevel\": \"warn\"",
+		"\"enabled\": false",
+		"\"workspace\": \"" + filepath.ToSlash(filepath.Join(expectedRuntimeRoot, "workspace")) + "\"",
+		"\"id\": \"main\"",
+		"\"mode\": \"off\"",
+		"\"id\": \"coder\"",
+		"\"host\": \"sandbox\"",
+		"\"workspaceAccess\": \"rw\"",
+		"\"image\": \"moltbox-dev-sandbox:latest\"",
+		"\"containerPrefix\": \"moltbox-dev-sandbox-openclaw-prod-\"",
+		"\"network\": \"none\"",
+		"\"user\": \"10001:10001\"",
+	} {
+		if !strings.Contains(string(openclawData), fragment) {
+			t.Fatalf("openclaw.json missing %q: %s", fragment, openclawData)
+		}
+	}
+	if strings.Contains(string(openclawData), "\"tools\": {\n    \"allow\"") {
+		t.Fatalf("openclaw.json should keep the web-only allowlist on the main agent, not globally: %s", openclawData)
+	}
+}
+
 func TestRenderServiceAssetsWritesScopedSecretEnvFile(t *testing.T) {
 	t.Parallel()
 
