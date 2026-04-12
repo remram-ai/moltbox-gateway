@@ -530,7 +530,7 @@ func TestRuntimeSkillRollbackRemovesReplayAndRestoresBaseline(t *testing.T) {
 	}
 }
 
-func TestDeployServicePreservesExistingRuntimeOpenClawConfig(t *testing.T) {
+func TestDeployServiceRefreshesExistingRuntimeOpenClawConfig(t *testing.T) {
 	t.Parallel()
 
 	manager, _, _, runtimeRoot, _ := newRuntimeTestManager(t)
@@ -554,8 +554,11 @@ func TestDeployServicePreservesExistingRuntimeOpenClawConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read runtime config: %v", err)
 	}
-	if string(data) != custom {
-		t.Fatalf("runtime config overwritten on redeploy:\n%s", data)
+	if string(data) == custom {
+		t.Fatalf("runtime config preserved stale data on redeploy:\n%s", data)
+	}
+	if !strings.Contains(string(data), "/home/node/.openclaw/workspace") {
+		t.Fatalf("runtime config = %s, want refreshed managed config", data)
 	}
 }
 

@@ -27,6 +27,8 @@ const (
 	runtimePluginSourceNPM   = "npm"
 	runtimeStateUID          = 0
 	runtimeStateGID          = 0
+	sandboxWorkspaceUID      = 10001
+	sandboxWorkspaceGID      = 10001
 )
 
 var runtimeSkillAliases = map[string]string{
@@ -105,6 +107,9 @@ func (m *Manager) prepareRuntimeDeploy(_ context.Context, route *cli.Route, serv
 	if err := ensureRuntimeStateOwnership(destination); err != nil {
 		return fmt.Errorf("set runtime state ownership for %s: %w", service, err)
 	}
+	if err := ensureSandboxWorkspaceOwnership(service, destination); err != nil {
+		return fmt.Errorf("set sandbox workspace ownership for %s: %w", service, err)
+	}
 	return nil
 }
 
@@ -153,11 +158,6 @@ func (m *Manager) syncRuntimeManagedState(service, runtimeRoot string) error {
 		destinationName := strings.TrimSuffix(name, ".template")
 		destinationPath := filepath.Join(runtimeRoot, destinationName)
 		if strings.HasSuffix(name, ".template") {
-			if _, err := os.Stat(destinationPath); err == nil {
-				continue
-			} else if !errorsIsNotExist(err) {
-				return err
-			}
 			if err := renderFile(sourcePath, destinationPath, context); err != nil {
 				return err
 			}
@@ -229,6 +229,9 @@ func (m *Manager) restoreRuntimeBaseline(service string) error {
 	}
 	if err := ensureRuntimeStateOwnership(destination); err != nil {
 		return fmt.Errorf("set runtime state ownership for %s: %w", service, err)
+	}
+	if err := ensureSandboxWorkspaceOwnership(service, destination); err != nil {
+		return fmt.Errorf("set sandbox workspace ownership for %s: %w", service, err)
 	}
 	return nil
 }
@@ -1098,6 +1101,41 @@ func ensureRuntimeStateOwnership(root string) error {
 			return err
 		}
 		if err := os.Chown(path, runtimeStateUID, runtimeStateGID); err != nil {
+			if errorsIsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		return nil
+	})
+}
+
+func ensureSandboxWorkspaceOwnership(service, runtimeRoot string) error {
+	if stdruntime.GOOS == "windows" {
+		return nil
+	}
+	if canonicalServiceName(service) != "openclaw-test" {
+		return nil
+	}
+	workspaceRoot := filepath.Join(runtimeRoot, "workspace")
+	info, err := os.Stat(workspaceRoot)
+	if err != nil {
+		if errorsIsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	return filepath.Walk(workspaceRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if errorsIsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if err := os.Chown(path, sandboxWorkspaceUID, sandboxWorkspaceGID); err != nil {
 			if errorsIsNotExist(err) {
 				return nil
 			}
