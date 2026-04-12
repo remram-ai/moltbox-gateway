@@ -2,16 +2,21 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/remram-ai/moltbox-gateway/internal/command"
 	appconfig "github.com/remram-ai/moltbox-gateway/internal/config"
+	"github.com/remram-ai/moltbox-gateway/internal/docker"
+	"github.com/remram-ai/moltbox-gateway/internal/orchestrator"
 	"github.com/remram-ai/moltbox-gateway/pkg/cli"
 )
 
@@ -220,6 +225,73 @@ func TestRuntimePluginRouteBuildsCanonicalRoute(t *testing.T) {
 	if route.Environment != "dev" || route.Runtime != "openclaw-dev" {
 		t.Fatalf("route = %#v, want dev/openclaw-dev", route)
 	}
+}
+
+func TestHandleServiceStatusReturnsOKForKnownImageServiceWithoutBuiltArtifact(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	servicesRoot := filepath.Join(root, "services-repo")
+	if err := os.MkdirAll(filepath.Join(servicesRoot, "services", "dev-sandbox"), 0o755); err != nil {
+		t.Fatalf("mkdir services root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), []byte("kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\nactive_container_prefix: moltbox-dev-sandbox\n"), 0o644); err != nil {
+		t.Fatalf("write service.yaml: %v", err)
+	}
+
+	manager := orchestrator.NewManager(appconfig.Config{
+		Paths: appconfig.PathsConfig{
+			StateRoot:   filepath.Join(root, "state"),
+			RuntimeRoot: filepath.Join(root, "runtime"),
+			LogsRoot:    filepath.Join(root, "logs"),
+		},
+		Repos: appconfig.ReposConfig{
+			Services: appconfig.RepoConfig{URL: servicesRoot},
+		},
+		Gateway: appconfig.GatewayConfig{Host: "127.0.0.1", Port: 7460},
+	}, fakeGatewayInspector{}, &fakeGatewayRunner{
+		results: []command.Result{
+			{ExitCode: 1},
+			{ExitCode: 0},
+		},
+	}, nil)
+
+	server := &Server{orchestrator: manager}
+	request := httptest.NewRequest(http.MethodGet, "/service/status?service=dev-sandbox", nil)
+	recorder := httptest.NewRecorder()
+
+	server.handleServiceStatus(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var response cli.ServiceStatusResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.ServiceKind != "image" || response.Status != "not-built" || response.Present {
+		t.Fatalf("response = %#v, want known image service with not-built status", response)
+	}
+}
+
+type fakeGatewayRunner struct {
+	results []command.Result
+}
+
+func (f *fakeGatewayRunner) Run(_ context.Context, _ string, _ string, _ ...string) (command.Result, error) {
+	if len(f.results) == 0 {
+		return command.Result{}, nil
+	}
+	result := f.results[0]
+	f.results = f.results[1:]
+	return result, nil
+}
+
+type fakeGatewayInspector struct{}
+
+func (fakeGatewayInspector) InspectContainer(_ context.Context, _ string) (docker.ContainerInfo, error) {
+	return docker.ContainerInfo{}, docker.ErrContainerNotFound
 }
 
 func newTestServer(t *testing.T, limiter *mcpAuthLimiter) (*Server, *bytes.Buffer) {

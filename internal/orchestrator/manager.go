@@ -1066,6 +1066,12 @@ func (m *Manager) renderConfigAssets(service, outputDir string) error {
 		return ensureCaddyTLSAssets(
 			filepath.Join(outputDir, "config", "caddy", "certs"),
 		)
+	case "dev-sandbox":
+		sourceRoot := filepath.Join(m.config.RuntimeRepoRoot(), "dev-sandbox")
+		if _, err := os.Stat(sourceRoot); err != nil {
+			return fmt.Errorf("read dev-sandbox runtime artifacts: %w", err)
+		}
+		return copyTree(sourceRoot, filepath.Join(outputDir, "runtime", "dev-sandbox"))
 	case "ollama":
 		modelsDir := filepath.Join(outputDir, "shared", "models")
 		return os.MkdirAll(modelsDir, 0o755)

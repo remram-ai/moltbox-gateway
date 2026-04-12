@@ -511,11 +511,14 @@ func TestRenderServiceAssetsForImageServiceCopiesBuildContext(t *testing.T) {
 
 	root := t.TempDir()
 	servicesRoot := filepath.Join(root, "services-repo")
+	runtimeRoot := filepath.Join(root, "runtime-repo")
 	stateRoot := filepath.Join(root, "state")
 
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\n")
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "Dockerfile"), "FROM scratch\n")
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "scripts", "verify.sh"), "#!/bin/sh\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "dev-sandbox", "config.yaml"), "gateway:\n  host: gateway\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "dev-sandbox", "scripts", "toolchain-smoke.sh"), "#!/bin/sh\n")
 
 	manager := NewManager(appconfig.Config{
 		Paths: appconfig.PathsConfig{
@@ -525,6 +528,7 @@ func TestRenderServiceAssetsForImageServiceCopiesBuildContext(t *testing.T) {
 		},
 		Repos: appconfig.ReposConfig{
 			Services: appconfig.RepoConfig{URL: servicesRoot},
+			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
 		},
 		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
 	}, fakeInspector{}, &fakeRunner{}, nil)
@@ -540,7 +544,12 @@ func TestRenderServiceAssetsForImageServiceCopiesBuildContext(t *testing.T) {
 	if commandArgs != nil {
 		t.Fatalf("RenderServiceAssets() commandArgs = %#v, want nil for image service", commandArgs)
 	}
-	for _, relative := range []string{"Dockerfile", filepath.Join("scripts", "verify.sh")} {
+	for _, relative := range []string{
+		"Dockerfile",
+		filepath.Join("scripts", "verify.sh"),
+		filepath.Join("runtime", "dev-sandbox", "config.yaml"),
+		filepath.Join("runtime", "dev-sandbox", "scripts", "toolchain-smoke.sh"),
+	} {
 		if _, err := os.Stat(filepath.Join(outputDir, relative)); err != nil {
 			t.Fatalf("expected %s to exist in rendered image context: %v", relative, err)
 		}
@@ -555,15 +564,21 @@ func TestDeployImageServiceBuildsAndRecordsMetadata(t *testing.T) {
 
 	root := t.TempDir()
 	servicesRoot := filepath.Join(root, "services-repo")
+	runtimeRoot := filepath.Join(root, "runtime-repo")
+	gatewayRoot := filepath.Join(root, "gateway-repo")
 	stateRoot := filepath.Join(root, "state")
 	logsRoot := filepath.Join(root, "logs")
 
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "service.yaml"), "kind: image\ncompose_project: dev-sandbox\nimage_name: moltbox-dev-sandbox\nactive_container_prefix: moltbox-dev-sandbox\n")
 	mustWriteFile(t, filepath.Join(servicesRoot, "services", "dev-sandbox", "Dockerfile"), "FROM scratch\n")
+	mustWriteFile(t, filepath.Join(runtimeRoot, "dev-sandbox", "config.yaml"), "gateway:\n  host: gateway\n")
+	mustWriteFile(t, filepath.Join(gatewayRoot, "cmd", "moltbox", "main.go"), "package main\nfunc main() {}\n")
+	mustWriteFile(t, filepath.Join(gatewayRoot, ".git", "HEAD"), "1234567890abcdef\n")
 
 	runner := &fakeRunner{
 		results: []command.Result{
-			{ExitCode: 0, Stdout: "build ok"},
+			{ExitCode: 0, Stdout: "cli build ok"},
+			{ExitCode: 0, Stdout: "image build ok"},
 		},
 	}
 
@@ -574,7 +589,9 @@ func TestDeployImageServiceBuildsAndRecordsMetadata(t *testing.T) {
 			LogsRoot:    logsRoot,
 		},
 		Repos: appconfig.ReposConfig{
+			Gateway:  appconfig.RepoConfig{URL: gatewayRoot},
 			Services: appconfig.RepoConfig{URL: servicesRoot},
+			Runtime:  appconfig.RepoConfig{URL: runtimeRoot},
 		},
 		Gateway: appconfig.GatewayConfig{Host: "0.0.0.0", Port: 7460},
 	}, fakeInspector{}, runner, nil)
@@ -586,10 +603,13 @@ func TestDeployImageServiceBuildsAndRecordsMetadata(t *testing.T) {
 	if !result.OK || result.ServiceKind != serviceKindImage {
 		t.Fatalf("DeployService() result = %#v, want successful image service deploy", result)
 	}
-	if len(runner.commands) != 1 {
-		t.Fatalf("expected one docker build command, got %d", len(runner.commands))
+	if len(runner.commands) != 2 {
+		t.Fatalf("expected cli build + docker build commands, got %d", len(runner.commands))
 	}
-	if got := strings.Join(runner.commands[0], " "); !strings.Contains(got, "build") || !strings.Contains(got, "moltbox-dev-sandbox:latest") || !strings.Contains(got, "build-") {
+	if got := strings.Join(runner.commands[0], " "); !strings.Contains(got, "golang:1.23-bookworm") || !strings.Contains(got, "./cmd/moltbox") {
+		t.Fatalf("cli build command = %q, want dockerized moltbox build", got)
+	}
+	if got := strings.Join(runner.commands[1], " "); !strings.Contains(got, "build") || !strings.Contains(got, "moltbox-dev-sandbox:latest") || !strings.Contains(got, "build-") {
 		t.Fatalf("docker build command = %q, want latest and immutable tags", got)
 	}
 
@@ -605,8 +625,15 @@ func TestDeployImageServiceBuildsAndRecordsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read build log: %v", err)
 	}
-	if !strings.Contains(string(logBytes), "build ok") {
+	if !strings.Contains(string(logBytes), "cli build ok") || !strings.Contains(string(logBytes), "image build ok") {
 		t.Fatalf("build log = %q, want build output", string(logBytes))
+	}
+	buildInputs, err := os.ReadFile(filepath.Join(stateRoot, "services", "dev-sandbox", "runtime", "dev-sandbox", "build-inputs.json"))
+	if err != nil {
+		t.Fatalf("read build inputs: %v", err)
+	}
+	if !strings.Contains(string(buildInputs), `"service": "dev-sandbox"`) {
+		t.Fatalf("build inputs = %q, want service metadata", string(buildInputs))
 	}
 
 	history, err := deploystate.New(stateRoot).ReadDeploymentHistory()

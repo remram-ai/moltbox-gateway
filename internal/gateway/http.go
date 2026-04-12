@@ -123,16 +123,6 @@ func (s *Server) handleServiceStatus(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	if !result.Present {
-		s.writeJSON(writer, http.StatusNotFound, cli.Error(
-			route,
-			"service_not_found",
-			fmt.Sprintf("service '%s' was not found", service),
-			"verify the service is deployed through the gateway",
-		))
-		return
-	}
-
 	s.writeJSON(writer, http.StatusOK, result)
 }
 

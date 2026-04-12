@@ -50,6 +50,10 @@ func (m *Manager) deployImageService(ctx context.Context, route *cli.Route, serv
 		return cli.ServiceDeployResult{}, fmt.Errorf("create image service metadata dir: %w", err)
 	}
 
+	if err := m.prepareImageServiceSourceContext(service, outputDir); err != nil {
+		return cli.ServiceDeployResult{}, err
+	}
+
 	digest, err := m.stateStore.DirectoryDigest(outputDir)
 	if err != nil {
 		return cli.ServiceDeployResult{}, fmt.Errorf("compute image build context digest: %w", err)
@@ -57,16 +61,27 @@ func (m *Manager) deployImageService(ctx context.Context, route *cli.Route, serv
 	immutableTag := imageImmutableTag(definition.ImageName, digest)
 	latestTag := imageLatestTag(definition)
 	commandArgs := []string{"build", "-f", filepath.Join(outputDir, "Dockerfile"), "-t", latestTag, "-t", immutableTag, outputDir}
+	var logBuilder strings.Builder
+
+	prebuildOutput, err := m.prepareImageServiceBinaryAssets(ctx, service, outputDir)
+	appendImageServiceLog(&logBuilder, prebuildOutput)
+	if err != nil {
+		_ = os.WriteFile(logPath, []byte(logBuilder.String()), 0o644)
+		return cli.ServiceDeployResult{}, err
+	}
 
 	result, err := m.runner.Run(ctx, outputDir, "docker", commandArgs...)
 	if err != nil {
+		appendImageServiceLog(&logBuilder, result.Stdout)
+		_ = os.WriteFile(logPath, []byte(logBuilder.String()), 0o644)
 		return cli.ServiceDeployResult{}, err
 	}
-	if writeErr := os.WriteFile(logPath, []byte(result.Stdout), 0o644); writeErr != nil {
+	appendImageServiceLog(&logBuilder, result.Stdout)
+	if writeErr := os.WriteFile(logPath, []byte(logBuilder.String()), 0o644); writeErr != nil {
 		return cli.ServiceDeployResult{}, fmt.Errorf("write image service build log: %w", writeErr)
 	}
 	if result.ExitCode != 0 {
-		return cli.ServiceDeployResult{}, fmt.Errorf("docker build failed: %s", strings.TrimSpace(result.Stdout))
+		return cli.ServiceDeployResult{}, fmt.Errorf("docker build failed: %s", strings.TrimSpace(logBuilder.String()))
 	}
 
 	metadata := imageServiceMetadata{
@@ -342,4 +357,77 @@ func imageImmutableTag(imageName, digest string) string {
 		suffix = suffix[:12]
 	}
 	return fmt.Sprintf("%s:build-%s", strings.TrimSpace(imageName), suffix)
+}
+
+func (m *Manager) prepareImageServiceSourceContext(service, outputDir string) error {
+	switch canonicalServiceName(service) {
+	case "dev-sandbox":
+		inputsPath := filepath.Join(outputDir, "runtime", "dev-sandbox", "build-inputs.json")
+		if err := os.MkdirAll(filepath.Dir(inputsPath), 0o755); err != nil {
+			return fmt.Errorf("create dev-sandbox build inputs dir: %w", err)
+		}
+		payload, err := json.MarshalIndent(map[string]string{
+			"service":           canonicalServiceName(service),
+			"gateway_revision":  gitRevision(m.config.GatewayRepoRoot()),
+			"services_revision": gitRevision(m.config.ServicesRepoRoot()),
+			"runtime_revision":  gitRevision(m.config.RuntimeRepoRoot()),
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal dev-sandbox build inputs: %w", err)
+		}
+		if err := os.WriteFile(inputsPath, append(payload, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write dev-sandbox build inputs: %w", err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) prepareImageServiceBinaryAssets(ctx context.Context, service, outputDir string) (string, error) {
+	switch canonicalServiceName(service) {
+	case "dev-sandbox":
+		gatewayRepoRoot := strings.TrimSpace(m.config.GatewayRepoRoot())
+		if gatewayRepoRoot == "" {
+			return "", fmt.Errorf("dev-sandbox image build requires repos.gateway.url in gateway config")
+		}
+		binDir := filepath.Join(outputDir, "bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			return "", fmt.Errorf("create dev-sandbox bin dir: %w", err)
+		}
+		commandArgs := []string{
+			"run",
+			"--rm",
+			"-v", fmt.Sprintf("%s:/src", gatewayRepoRoot),
+			"-v", fmt.Sprintf("%s:/out", binDir),
+			"-w", "/src",
+			"golang:1.23-bookworm",
+			"sh",
+			"-lc",
+			"set -eu; printf 'building moltbox cli\\n'; env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 /usr/local/go/bin/go build -buildvcs=false -o /out/moltbox ./cmd/moltbox",
+		}
+		result, err := m.runner.Run(ctx, "", "docker", commandArgs...)
+		if err != nil {
+			return result.Stdout, err
+		}
+		if result.ExitCode != 0 {
+			return result.Stdout, fmt.Errorf("build dev-sandbox moltbox cli failed: %s", strings.TrimSpace(result.Stdout))
+		}
+		return result.Stdout, nil
+	default:
+		return "", nil
+	}
+}
+
+func appendImageServiceLog(builder *strings.Builder, chunk string) {
+	if builder == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(chunk)
+	if trimmed == "" {
+		return
+	}
+	if builder.Len() > 0 {
+		builder.WriteString("\n")
+	}
+	builder.WriteString(trimmed)
+	builder.WriteString("\n")
 }
